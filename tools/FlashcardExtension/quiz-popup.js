@@ -68,7 +68,7 @@ function attachEnglishUnikeyBypass(inputEl, isEnabledFn) {
 }
 
 function normalizeText(str) {
-  return String(str || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return String(str || '').normalize('NFC').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function isAnswerCorrect(userAnswer, targetText) {
@@ -103,13 +103,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const isEnToVi = direction !== 'vi_to_en';
   const expectedAnswer = isEnToVi ? card.vietnamese : card.english;
 
-  document.getElementById('promptLabel').textContent = isEnToVi ? 'Từ Tiếng Anh' : 'Nghĩa Tiếng Việt';
+  document.getElementById('promptLabel').textContent = isEnToVi ? 'English' : 'Vietnamese';
   document.getElementById('promptWord').textContent = isEnToVi ? card.english : card.vietnamese;
   document.getElementById('phoneticText').textContent = isEnToVi && card.phonetic ? card.phonetic : '';
 
   const input = document.getElementById('answerInput');
   const feedback = document.getElementById('feedbackText');
-  input.placeholder = isEnToVi ? 'Nhập nghĩa Tiếng Việt...' : 'Nhập từ Tiếng Anh...';
+  input.placeholder = isEnToVi ? 'Vietnamese...' : 'English...';
   attachEnglishUnikeyBypass(input, () => !isEnToVi);
   input.focus();
 
@@ -119,12 +119,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('hintBtn').addEventListener('click', () => {
-    const clean = String(expectedAnswer || '').trim();
+    const clean = String(expectedAnswer || '').normalize('NFC').trim();
     const masked = clean.length <= 2
       ? clean
       : clean[0] + '_'.repeat(Math.min(6, clean.length - 2)) + clean[clean.length - 1];
     feedback.className = 'et-feedback';
-    feedback.textContent = `Gợi ý: ${masked} (${clean.length} ký tự)`;
+    feedback.textContent = `Hint: ${masked} (${clean.length} chars)`;
     input.focus();
   });
 
@@ -134,12 +134,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       input.classList.remove('error');
       input.classList.add('success');
       feedback.className = 'et-feedback ok';
-      feedback.textContent = '✓ Chính xác! Đang đóng và đếm ngược lại...';
+      feedback.textContent = '✓ Correct!';
       setTimeout(closeAndRestartTimer, 600);
     } else {
       input.classList.add('error');
       feedback.className = 'et-feedback err';
-      feedback.textContent = '✗ Chưa đúng, hãy thử lại!';
+      feedback.textContent = '✗ Try again!';
       input.select();
     }
   });

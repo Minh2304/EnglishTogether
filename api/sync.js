@@ -165,9 +165,9 @@ async function writeUserToPostgres(sql, email, body) {
 
     for (const c of incoming) {
       const cardId = String(c.id);
-      const english = String(c.english).trim();
-      const vietnamese = String(c.vietnamese).trim();
-      const phonetic = String(c.phonetic || '').trim();
+      const english = String(c.english).normalize('NFC').trim();
+      const vietnamese = String(c.vietnamese).normalize('NFC').trim();
+      const phonetic = String(c.phonetic || '').normalize('NFC').trim();
       const partOfSpeech = String(c.partOfSpeech || '').trim();
       const audioUrl = String(c.audioUrl || '').trim();
       const createdAt = Number(c.createdAt) || now;

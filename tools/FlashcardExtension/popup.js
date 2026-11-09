@@ -6,7 +6,7 @@ const sidePanelPort = chrome.runtime.connect({ name: 'ET_SIDE_PANEL' });
 
 const state = {
   email: '',
-  displayName: 'Học viên',
+  displayName: 'User',
   serverUrl: DEFAULT_SERVER_URL,
   flashcards: [],
   settings: {
@@ -55,16 +55,19 @@ const U_HORN_MAP = {
 };
 
 function reverseUnikeyTelex(prevVal, curVal, cursorPos) {
+  const normCur = String(curVal || '').normalize('NFC');
+  const normPrev = String(prevVal || '').normalize('NFC');
+
   let result = '';
   let appendedAtCursor = '';
 
-  for (let i = 0; i < curVal.length; i++) {
-    const ch = curVal[i];
+  for (let i = 0; i < normCur.length; i++) {
+    const ch = normCur[i];
     const lower = ch.toLowerCase();
     const isUpper = ch !== lower;
 
     if (Object.prototype.hasOwnProperty.call(U_HORN_MAP, lower)) {
-      const prevCharLower = (prevVal[i] || '').toLowerCase();
+      const prevCharLower = (normPrev[i] || '').toLowerCase();
       const toneKey = U_HORN_MAP[lower];
       if (prevCharLower === 'u') {
         result += isUpper ? 'U' : 'u';
@@ -82,7 +85,7 @@ function reverseUnikeyTelex(prevVal, curVal, cursorPos) {
     }
   }
 
-  if (!appendedAtCursor && result === curVal) {
+  if (!appendedAtCursor && result === normCur) {
     return null;
   }
 
@@ -94,24 +97,24 @@ function reverseUnikeyTelex(prevVal, curVal, cursorPos) {
 
 function attachEnglishUnikeyBypass(inputEl, isEnabledFn) {
   if (!inputEl) return;
-  let prevValue = inputEl.value || '';
+  inputEl.__prevUnikeyVal = inputEl.value || '';
 
   inputEl.addEventListener('focus', () => {
-    prevValue = inputEl.value || '';
+    inputEl.__prevUnikeyVal = inputEl.value || '';
   });
 
   inputEl.addEventListener('input', () => {
     if (isEnabledFn && !isEnabledFn()) {
-      prevValue = inputEl.value;
+      inputEl.__prevUnikeyVal = inputEl.value;
       return;
     }
     const curValue = inputEl.value;
-    const fixed = reverseUnikeyTelex(prevValue, curValue, inputEl.selectionStart);
+    const fixed = reverseUnikeyTelex(inputEl.__prevUnikeyVal || '', curValue, inputEl.selectionStart);
     if (fixed) {
       inputEl.value = fixed.value;
       inputEl.setSelectionRange(fixed.cursor, fixed.cursor);
     }
-    prevValue = inputEl.value;
+    inputEl.__prevUnikeyVal = inputEl.value;
   });
 }
 
@@ -124,9 +127,17 @@ const headerSyncBtn = document.getElementById('headerSyncBtn');
 const syncStatusDot = document.getElementById('syncStatusDot');
 const syncStatusText = document.getElementById('syncStatusText');
 
-// Add Flashcard Elements
+// Add Flashcard & Add List Elements
 const toggleAddBtn = document.getElementById('toggleAddBtn');
+const toggleAddListBtn = document.getElementById('toggleAddListBtn');
 const addCardDrawer = document.getElementById('addCardDrawer');
+const addListDrawer = document.getElementById('addListDrawer');
+const bulkListTextarea = document.getElementById('bulkListTextarea');
+const importFileInput = document.getElementById('importFileInput');
+const chooseFileBtn = document.getElementById('chooseFileBtn');
+const bulkStatusText = document.getElementById('bulkStatusText');
+const saveBulkListBtn = document.getElementById('saveBulkListBtn');
+
 const totalWordsCount = document.getElementById('totalWordsCount');
 const optAllCount = document.getElementById('optAllCount');
 const addFlashcardForm = document.getElementById('addFlashcardForm');
@@ -165,10 +176,11 @@ const arenaSummaryText = document.getElementById('arenaSummaryText');
 const arenaRestartBtn = document.getElementById('arenaRestartBtn');
 const arenaDoneBtn = document.getElementById('arenaDoneBtn');
 
-// Saved words list
+// Saved words list & Export
 const savedWordsSection = document.getElementById('savedWordsSection');
 const savedWordsList = document.getElementById('savedWordsList');
 const searchSavedInput = document.getElementById('searchSavedInput');
+const exportWordsBtn = document.getElementById('exportWordsBtn');
 
 // Setting Tab Elements
 const userAvatarCircle = document.getElementById('userAvatarCircle');
@@ -212,9 +224,16 @@ async function loadStateFromStorage() {
     'lastSyncedAt'
   ]);
   state.email = stored.email || '';
-  state.displayName = stored.displayName || 'Học viên';
+  state.displayName = stored.displayName && stored.displayName !== 'Học viên' ? stored.displayName : 'User';
   state.serverUrl = DEFAULT_SERVER_URL;
-  state.flashcards = Array.isArray(stored.flashcards) ? stored.flashcards : [];
+  // Normalize all stored flashcards to Unicode NFC so Vietnamese comparisons never fail
+  state.flashcards = Array.isArray(stored.flashcards)
+    ? stored.flashcards.map(c => ({
+        ...c,
+        english: String(c.english || '').normalize('NFC').trim(),
+        vietnamese: String(c.vietnamese || '').normalize('NFC').trim()
+      }))
+    : [];
   state.settings = {
     popupEnabled: false,
     popupIntervalMinutes: 5,
@@ -243,10 +262,10 @@ function renderAllUI() {
   practiceDirectionSelect.value = state.settings.practiceDirection || 'mixed';
   renderSavedWordsList(searchSavedInput.value);
 
-  const name = state.displayName || (state.email ? state.email.split('@')[0] : 'Học viên');
+  const name = state.displayName || (state.email ? state.email.split('@')[0] : 'User');
   userAvatarCircle.textContent = name.charAt(0).toUpperCase();
   displayHeaderName.textContent = name;
-  displayHeaderEmail.textContent = state.email || 'Chưa nhập Gmail';
+  displayHeaderEmail.textContent = state.email || 'No Gmail linked';
 
   settingEmailInput.value = state.email;
   settingDisplayNameInput.value = state.displayName || '';
@@ -296,13 +315,54 @@ function bindEvents() {
     await triggerCloudPull(false);
   });
 
-  // 3. '+' Button on Top-Left to toggle Add Flashcard drawer
+  // 3a. '+' Add Flashcard Button
   toggleAddBtn.addEventListener('click', () => {
     const isOpen = addCardDrawer.classList.toggle('open');
     toggleAddBtn.classList.toggle('expanded', isOpen);
     if (isOpen) {
+      addListDrawer.classList.remove('open');
+      toggleAddListBtn.classList.remove('expanded');
       setTimeout(() => enInput.focus(), 100);
     }
+  });
+
+  // 3b. 'Add List' Button
+  toggleAddListBtn.addEventListener('click', () => {
+    const isOpen = addListDrawer.classList.toggle('open');
+    toggleAddListBtn.classList.toggle('expanded', isOpen);
+    if (isOpen) {
+      addCardDrawer.classList.remove('open');
+      toggleAddBtn.classList.remove('expanded');
+      bulkStatusText.textContent = 'Duplicates will be skipped';
+      setTimeout(() => bulkListTextarea.focus(), 100);
+    }
+  });
+
+  // 3c. Bulk Import from File or Textarea
+  chooseFileBtn.addEventListener('click', () => {
+    importFileInput.value = '';
+    importFileInput.click();
+  });
+
+  importFileInput.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = String(reader.result || '').normalize('NFC');
+      bulkListTextarea.value = content;
+      bulkStatusText.textContent = `Loaded ${file.name}`;
+    };
+    reader.readAsText(file, 'utf-8');
+  });
+
+  saveBulkListBtn.addEventListener('click', async () => {
+    await handleSaveBulkList();
+  });
+
+  // 3d. Export Saved Words to File
+  exportWordsBtn.addEventListener('click', () => {
+    handleExportWords();
   });
 
   // 4. Dictionary Autocomplete & Auto-Translation on English Input
@@ -365,15 +425,15 @@ function bindEvents() {
     playWordAudio(currentLookupMeta.word || enInput.value, currentLookupMeta.audioUrl);
   });
 
-  // 5. Save New Flashcard
+  // 5. Save Single Flashcard
   addFlashcardForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const enWord = enInput.value.trim();
-    const viMeaning = viInput.value.trim();
+    const enWord = enInput.value.normalize('NFC').trim();
+    const viMeaning = viInput.value.normalize('NFC').trim();
     if (!enWord || !viMeaning) return;
 
     const existingIdx = state.flashcards.findIndex(
-      c => c.english.toLowerCase() === enWord.toLowerCase()
+      c => c.english.normalize('NFC').toLowerCase() === enWord.toLowerCase()
     );
 
     const cardObj = {
@@ -397,13 +457,14 @@ function bindEvents() {
     renderAllUI();
 
     enInput.value = '';
+    enInput.__prevUnikeyVal = '';
     viInput.value = '';
     dictMetaBox.classList.add('hidden');
     previewAudioBtn.classList.add('hidden');
     altMeaningsChips.classList.add('hidden');
     saveCardBtn.textContent = '✓';
     setTimeout(() => {
-      saveCardBtn.textContent = 'Lưu';
+      saveCardBtn.textContent = 'Save';
     }, 900);
     enInput.focus();
 
@@ -469,7 +530,7 @@ function bindEvents() {
   accountSettingsForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const newEmail = settingEmailInput.value.trim().toLowerCase();
-    const newName = settingDisplayNameInput.value.trim() || (newEmail ? newEmail.split('@')[0] : 'Học viên');
+    const newName = settingDisplayNameInput.value.trim() || (newEmail ? newEmail.split('@')[0] : 'User');
 
     const emailChanged = newEmail && newEmail !== state.email;
     state.email = newEmail;
@@ -489,7 +550,7 @@ function bindEvents() {
       }
       const res = await triggerCloudPush(false);
       if (res && res.ok) {
-        showSettingToast('✓ Đã lưu và đồng bộ!');
+        showSettingToast('✓ Saved & Synced!');
       }
     }
   });
@@ -502,6 +563,141 @@ function bindEvents() {
   popupIntervalInput.addEventListener('change', async () => {
     await savePopupSettings();
   });
+}
+
+// ================= BULK IMPORT ("ADD LIST") & EXPORT =================
+function parseBulkInput(rawText) {
+  const trimmed = String(rawText || '').normalize('NFC').trim();
+  if (!trimmed) return [];
+
+  // 1. Check if JSON format
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.flashcards) ? parsed.flashcards : []);
+      return arr
+        .map(item => ({
+          english: String(item.english || item.en || item.word || '').normalize('NFC').trim(),
+          vietnamese: String(item.vietnamese || item.vi || item.meaning || '').normalize('NFC').trim(),
+          phonetic: String(item.phonetic || '').normalize('NFC').trim(),
+          partOfSpeech: String(item.partOfSpeech || '').trim(),
+          audioUrl: String(item.audioUrl || '').trim()
+        }))
+        .filter(x => x.english && x.vietnamese);
+    } catch (e) {
+      // Fallback to line-by-line parsing
+    }
+  }
+
+  // 2. Line-by-line parsing (supports "english : vietnamese", "english - vietnamese", "english = vietnamese", "english \t vietnamese", "english, vietnamese")
+  const lines = trimmed.split(/\r?\n/);
+  const results = [];
+
+  for (const line of lines) {
+    const cleanLine = line.trim();
+    if (!cleanLine || cleanLine.startsWith('#') || cleanLine.startsWith('//')) continue;
+
+    let parts = null;
+    if (cleanLine.includes('\t')) {
+      parts = cleanLine.split('\t');
+    } else if (cleanLine.includes(':')) {
+      parts = cleanLine.split(':');
+    } else if (cleanLine.includes(' - ')) {
+      parts = cleanLine.split(' - ');
+    } else if (cleanLine.includes('=')) {
+      parts = cleanLine.split('=');
+    } else if (cleanLine.includes('-')) {
+      parts = cleanLine.split('-');
+    } else if (cleanLine.includes(',')) {
+      parts = cleanLine.split(',');
+    }
+
+    if (parts && parts.length >= 2) {
+      const en = parts[0].normalize('NFC').trim();
+      const vi = parts.slice(1).join(':').normalize('NFC').trim();
+      if (en && vi) {
+        results.push({
+          english: en,
+          vietnamese: vi,
+          phonetic: '',
+          partOfSpeech: '',
+          audioUrl: ''
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+async function handleSaveBulkList() {
+  const items = parseBulkInput(bulkListTextarea.value);
+  if (items.length === 0) {
+    bulkStatusText.textContent = 'Format: word : meaning';
+    return;
+  }
+
+  // Track existing English words (case-insensitive, NFC) -> Keep old words, skip duplicates!
+  const existingSet = new Set(
+    state.flashcards.map(c => c.english.normalize('NFC').trim().toLowerCase())
+  );
+
+  let addedCount = 0;
+  let skippedCount = 0;
+  const now = Date.now();
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const key = item.english.toLowerCase();
+
+    if (existingSet.has(key)) {
+      // Duplicate found -> skip new word, keep existing old word
+      skippedCount++;
+      continue;
+    }
+
+    existingSet.add(key);
+    state.flashcards.unshift({
+      id: `fc_${now}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+      english: item.english,
+      vietnamese: item.vietnamese,
+      phonetic: item.phonetic || '',
+      partOfSpeech: item.partOfSpeech || '',
+      audioUrl: item.audioUrl || '',
+      createdAt: now + i,
+      updatedAt: now + i
+    });
+    addedCount++;
+  }
+
+  await saveStateToStorage();
+  renderAllUI();
+
+  bulkListTextarea.value = '';
+  bulkStatusText.textContent = `✓ Added ${addedCount}, skipped ${skippedCount} duplicate(s)`;
+
+  if (addedCount > 0) {
+    triggerCloudPush(false);
+  }
+}
+
+function handleExportWords() {
+  if (state.flashcards.length === 0) return;
+
+  const lines = state.flashcards.map(
+    c => `${c.english.normalize('NFC')} : ${c.vietnamese.normalize('NFC')}`
+  );
+  const content = lines.join('\r\n');
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `flashcards_${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ================= DICTIONARY & TRANSLATION APIs =================
@@ -542,6 +738,7 @@ async function fetchWordSuggestions(prefix) {
 function selectSuggestionWord(word) {
   if (!word) return;
   enInput.value = word;
+  enInput.__prevUnikeyVal = word;
   hideSuggestions();
   userEditedViManually = false;
   lookupAndTranslateWord(word, true);
@@ -553,7 +750,7 @@ function hideSuggestions() {
 }
 
 async function lookupAndTranslateWord(rawWord, forceFillVi = false) {
-  const word = String(rawWord || '').trim();
+  const word = String(rawWord || '').normalize('NFC').trim();
   if (!word) return;
 
   const [dictResult, transResult] = await Promise.allSettled([
@@ -591,19 +788,19 @@ async function lookupAndTranslateWord(rawWord, forceFillVi = false) {
   if (viData && viData.primaryMeaning) {
     const shouldAutoFill = forceFillVi || dictData?.isValid || !userEditedViManually;
     if (shouldAutoFill && (!userEditedViManually || forceFillVi)) {
-      viInput.value = viData.primaryMeaning;
+      viInput.value = viData.primaryMeaning.normalize('NFC');
     }
 
     if (Array.isArray(viData.alternatives) && viData.alternatives.length > 0) {
       altMeaningsChips.innerHTML = viData.alternatives
         .slice(0, 6)
-        .map(alt => `<span class="alt-chip" data-meaning="${escapeHtml(alt)}">+ ${escapeHtml(alt)}</span>`)
+        .map(alt => `<span class="alt-chip" data-meaning="${escapeHtml(alt.normalize('NFC'))}">+ ${escapeHtml(alt.normalize('NFC'))}</span>`)
         .join('');
       altMeaningsChips.classList.remove('hidden');
 
       altMeaningsChips.querySelectorAll('.alt-chip').forEach(chip => {
         chip.addEventListener('click', () => {
-          viInput.value = chip.dataset.meaning;
+          viInput.value = chip.dataset.meaning.normalize('NFC');
           viInput.focus();
         });
       });
@@ -653,7 +850,7 @@ async function fetchVietnameseTranslation(word) {
     const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
-      const primary = data?.[0]?.map(item => item?.[0]).filter(Boolean).join('') || '';
+      const primary = (data?.[0]?.map(item => item?.[0]).filter(Boolean).join('') || '').normalize('NFC');
       const alternatives = [];
 
       if (Array.isArray(data?.[1])) {
@@ -661,8 +858,9 @@ async function fetchVietnameseTranslation(word) {
           const terms = posGroup?.[1];
           if (Array.isArray(terms)) {
             for (const term of terms) {
-              if (term && !alternatives.includes(term)) {
-                alternatives.push(term);
+              const normTerm = String(term || '').normalize('NFC').trim();
+              if (normTerm && !alternatives.includes(normTerm)) {
+                alternatives.push(normTerm);
               }
             }
           }
@@ -686,7 +884,7 @@ async function fetchVietnameseTranslation(word) {
     );
     if (res.ok) {
       const data = await res.json();
-      const translated = data?.responseData?.translatedText || '';
+      const translated = String(data?.responseData?.translatedText || '').normalize('NFC').trim();
       if (translated) {
         return {
           primaryMeaning: translated.toLowerCase(),
@@ -789,7 +987,7 @@ function renderCurrentPracticeQuestion() {
     arenaSummaryBox.classList.remove('hidden');
 
     const percent = Math.round((practiceSession.score / total) * 100);
-    arenaSummaryText.textContent = `Đúng ${practiceSession.score} / ${total} từ (${percent}%)`;
+    arenaSummaryText.textContent = `Score: ${practiceSession.score} / ${total} (${percent}%)`;
     return;
   }
 
@@ -811,17 +1009,19 @@ function renderCurrentPracticeQuestion() {
   arenaAudioBtn.classList.toggle('hidden', !isEnToVi);
 
   arenaAnswerInput.value = '';
+  arenaAnswerInput.__prevUnikeyVal = '';
   arenaAnswerInput.disabled = false;
   arenaAnswerInput.lang = isEnToVi ? 'vi' : 'en';
-  arenaAnswerInput.placeholder = isEnToVi ? 'Tiếng Việt...' : 'English...';
-  arenaSubmitBtn.textContent = 'Kiểm tra';
-  arenaSkipBtn.textContent = 'Đáp án';
+  arenaAnswerInput.placeholder = isEnToVi ? 'Vietnamese...' : 'English...';
+  arenaSubmitBtn.textContent = 'Check';
+  arenaSkipBtn.textContent = 'Answer';
   arenaFeedbackBox.classList.add('hidden');
   arenaAnswerInput.focus();
 }
 
 function normalizeAnswer(str) {
   return String(str || '')
+    .normalize('NFC')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
@@ -869,7 +1069,7 @@ function handlePracticeSubmit() {
     }, 750);
   } else {
     arenaFeedbackBox.className = 'arena-feedback wrong';
-    arenaFeedbackBox.textContent = '✗ Chưa đúng!';
+    arenaFeedbackBox.textContent = '✗ Try again!';
     arenaFeedbackBox.classList.remove('hidden');
     arenaAnswerInput.select();
   }
@@ -887,23 +1087,23 @@ function handlePracticeSkipOrNext() {
   arenaFeedbackBox.className = 'arena-feedback wrong';
   arenaFeedbackBox.textContent = `${card.english} ➔ ${card.vietnamese}`;
   arenaFeedbackBox.classList.remove('hidden');
-  arenaSubmitBtn.textContent = 'Tiếp ➔';
-  arenaSkipBtn.textContent = 'Tiếp ➔';
+  arenaSubmitBtn.textContent = 'Next ➔';
+  arenaSkipBtn.textContent = 'Next ➔';
 }
 
 // ================= SAVED WORDS LIST =================
 function renderSavedWordsList(filterText = '') {
-  const q = String(filterText || '').trim().toLowerCase();
+  const q = String(filterText || '').normalize('NFC').trim().toLowerCase();
   const filtered = state.flashcards.filter(
     c =>
-      c.english.toLowerCase().includes(q) ||
-      c.vietnamese.toLowerCase().includes(q)
+      c.english.normalize('NFC').toLowerCase().includes(q) ||
+      c.vietnamese.normalize('NFC').toLowerCase().includes(q)
   );
 
   if (filtered.length === 0) {
     savedWordsList.innerHTML = `
       <div style="text-align:center;color:#64748b;font-size:12px;padding:12px 0;">
-        ${state.flashcards.length === 0 ? 'Chưa có từ nào.' : 'Không tìm thấy.'}
+        ${state.flashcards.length === 0 ? 'No saved words yet.' : 'No matching words.'}
       </div>
     `;
     return;
@@ -919,11 +1119,20 @@ function renderSavedWordsList(filterText = '') {
           <span style="margin:0 6px;color:#475569;">➔</span>
           <span>${escapeHtml(card.vietnamese)}</span>
         </div>
-        <button class="delete-card-btn" data-id="${escapeHtml(card.id)}" title="Xóa">&times;</button>
+        <div class="saved-word-actions">
+          <button class="speak-card-btn" data-word="${escapeHtml(card.english)}" data-audio="${escapeHtml(card.audioUrl || '')}" title="Listen pronunciation">🔊</button>
+          <button class="delete-card-btn" data-id="${escapeHtml(card.id)}" title="Delete">&times;</button>
+        </div>
       </div>
     `
     )
     .join('');
+
+  savedWordsList.querySelectorAll('.speak-card-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      playWordAudio(btn.dataset.word, btn.dataset.audio);
+    });
+  });
 
   savedWordsList.querySelectorAll('.delete-card-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -956,7 +1165,7 @@ async function triggerCloudPull(silent = false) {
   await loadStateFromStorage();
   renderAllUI();
   if (!silent && res && !res.ok && res.error) {
-    showSettingToast(`Lỗi đồng bộ: ${res.error}`, true);
+    showSettingToast(`Sync error: ${res.error}`, true);
   }
   return res;
 }

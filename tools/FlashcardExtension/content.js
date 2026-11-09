@@ -81,6 +81,7 @@
 
   function normalizeText(str) {
     return String(str || '')
+      .normalize('NFC')
       .trim()
       .toLowerCase()
       .replace(/\s+/g, ' ');
@@ -122,9 +123,9 @@
 
     const { card, direction } = payload;
     const isEnToVi = direction !== 'vi_to_en';
-    const promptLabel = isEnToVi ? 'Từ Tiếng Anh' : 'Nghĩa Tiếng Việt';
+    const promptLabel = isEnToVi ? 'English' : 'Vietnamese';
     const promptValue = isEnToVi ? card.english : card.vietnamese;
-    const answerPlaceholder = isEnToVi ? 'Nhập nghĩa Tiếng Việt...' : 'Nhập từ Tiếng Anh...';
+    const answerPlaceholder = isEnToVi ? 'Vietnamese...' : 'English...';
     const expectedAnswer = isEnToVi ? card.vietnamese : card.english;
 
     const host = document.createElement('div');
@@ -299,7 +300,7 @@
     wrapper.innerHTML = `
       <div class="et-header">
         <span class="et-badge">⚡ Flashcard Check</span>
-        <button class="et-close-btn" id="etCloseBtn" title="Tắt tạm thời (sẽ hiện lại sau thời gian đã cài)">&times;</button>
+        <button class="et-close-btn" id="etCloseBtn" title="Close">&times;</button>
       </div>
       <div class="et-prompt-box">
         <div class="et-prompt-label">${promptLabel}</div>
@@ -308,11 +309,11 @@
       </div>
       <form id="etQuizForm" class="et-input-row" autocomplete="off">
         <input type="text" id="etAnswerInput" class="et-input" lang="${isEnToVi ? 'vi' : 'en'}" spellcheck="false" placeholder="${answerPlaceholder}" />
-        <button type="submit" class="et-submit-btn">Kiểm tra</button>
+        <button type="submit" class="et-submit-btn">Check</button>
       </form>
       <div class="et-footer">
-        <span id="etFeedback" class="et-feedback">Nhập đáp án rồi nhấn Enter</span>
-        <button type="button" id="etHintBtn" class="et-hint-btn">Xem gợi ý</button>
+        <span id="etFeedback" class="et-feedback">Press Enter to check</span>
+        <button type="button" id="etHintBtn" class="et-hint-btn">Hint</button>
       </div>
     `;
 
@@ -345,12 +346,12 @@
     });
 
     hintBtn.addEventListener('click', () => {
-      const clean = String(expectedAnswer || '').trim();
+      const clean = String(expectedAnswer || '').normalize('NFC').trim();
       const masked = clean.length <= 2
         ? clean
         : clean[0] + '_'.repeat(Math.min(6, clean.length - 2)) + clean[clean.length - 1];
       feedback.className = 'et-feedback';
-      feedback.textContent = `Gợi ý: ${masked} (${clean.length} ký tự)`;
+      feedback.textContent = `Hint: ${masked} (${clean.length} chars)`;
       input.focus();
     });
 
@@ -361,7 +362,7 @@
         input.classList.remove('error');
         input.classList.add('success');
         feedback.className = 'et-feedback ok';
-        feedback.textContent = '✓ Chính xác! Đang đóng và đếm ngược lại...';
+        feedback.textContent = '✓ Correct!';
         setTimeout(() => {
           closePopupAndRestartTimer(host);
         }, 650);
@@ -370,7 +371,7 @@
         void input.offsetWidth;
         input.classList.add('error');
         feedback.className = 'et-feedback err';
-        feedback.textContent = '✗ Chưa đúng, hãy thử lại!';
+        feedback.textContent = '✗ Try again!';
         input.select();
       }
     });

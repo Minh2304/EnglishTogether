@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -18,7 +18,7 @@
           <span class="tab-icon">⚙️</span> Setting
         </button>
       </div>
-      <button class="sync-pill" id="headerSyncBtn" title="Đồng bộ dữ liệu">
+      <button class="sync-pill" id="headerSyncBtn" title="Sync data with cloud">
         <span class="sync-dot" id="syncStatusDot"></span>
         <span id="syncStatusText">Sync</span>
       </button>
@@ -26,18 +26,23 @@
 
     <!-- ================= TAB 1: FLASHCARD ================= -->
     <main class="tab-panel active" id="panelFlashcard">
-      <!-- Top Row of Flashcard Tab: '+' Button on Top-Left + Stats -->
+      <!-- Top Row of Flashcard Tab: '+' Add Flashcard + 'Add List' + Word Counter -->
       <div class="flashcard-top-bar">
-        <button class="add-toggle-btn" id="toggleAddBtn" title="Thêm từ mới">
-          <span class="plus-icon" id="plusIcon">+</span>
-          <span class="add-btn-label">Add Flashcard</span>
-        </button>
+        <div class="top-left-actions">
+          <button class="add-toggle-btn" id="toggleAddBtn" title="Add a single flashcard">
+            <span class="plus-icon" id="plusIcon">+</span>
+            <span>Add Flashcard</span>
+          </button>
+          <button class="add-list-btn" id="toggleAddListBtn" title="Import or paste a word list">
+            <span>📋 Add List</span>
+          </button>
+        </div>
         <div class="word-counter-badge">
-          <strong id="totalWordsCount">0</strong> từ
+          <strong id="totalWordsCount">0</strong> words
         </div>
       </div>
 
-      <!-- Expandable Add Flashcard Section -->
+      <!-- Expandable Add Single Flashcard Drawer -->
       <section class="add-card-drawer" id="addCardDrawer">
         <div class="drawer-inner">
           <form id="addFlashcardForm" autocomplete="off">
@@ -56,7 +61,7 @@
                       placeholder="English..."
                       required
                     />
-                    <button type="button" class="audio-btn hidden" id="previewAudioBtn" title="Nghe phát âm">
+                    <button type="button" class="audio-btn hidden" id="previewAudioBtn" title="Listen pronunciation">
                       🔊
                     </button>
                   </div>
@@ -69,7 +74,7 @@
                     type="text"
                     id="viInput"
                     lang="vi"
-                    placeholder="Tiếng Việt..."
+                    placeholder="Vietnamese..."
                     required
                   />
                 </div>
@@ -77,7 +82,7 @@
 
               <!-- Save Button on the Right of the 2 Inputs -->
               <button type="submit" class="btn-save-side" id="saveCardBtn">
-                Lưu
+                Save
               </button>
             </div>
 
@@ -94,11 +99,33 @@
         </div>
       </section>
 
+      <!-- Expandable Add List (Bulk Import) Drawer -->
+      <section class="add-card-drawer" id="addListDrawer">
+        <div class="drawer-inner">
+          <textarea
+            id="bulkListTextarea"
+            class="bulk-textarea"
+            rows="4"
+            placeholder="push : đẩy&#10;pull : kéo&#10;resilient : kiên cường"
+          ></textarea>
+          <div class="bulk-actions-row">
+            <input type="file" id="importFileInput" accept=".txt,.csv,.json" class="hidden" />
+            <button type="button" class="btn-secondary btn-sm" id="chooseFileBtn" title="Load from .txt, .csv, or .json file">
+              📂 File
+            </button>
+            <span class="bulk-status-text" id="bulkStatusText">Duplicates will be skipped</span>
+            <button type="button" class="btn-primary btn-sm" id="saveBulkListBtn" style="flex:0 0 auto;">
+              Save List
+            </button>
+          </div>
+        </div>
+      </section>
+
       <!-- PRACTICE SECTION -->
       <section class="practice-section" id="practiceMenuSection">
         <div class="section-header-row">
           <h2 class="section-title">Practice</h2>
-          <div class="direction-selector" title="Chiều luyện tập">
+          <div class="direction-selector" title="Practice direction">
             <select id="practiceDirectionSelect">
               <option value="mixed">🔄 EN ↔ VI</option>
               <option value="en_to_vi">🇬🇧 EN ➔ 🇻🇳 VI</option>
@@ -145,12 +172,12 @@
       <!-- ACTIVE PRACTICE ARENA (Shown when user clicks Start) -->
       <section class="practice-arena hidden" id="practiceArenaSection">
         <div class="arena-top-bar">
-          <button class="btn-back" id="exitPracticeBtn">← Quay lại</button>
+          <button class="btn-back" id="exitPracticeBtn">← Back</button>
           <div class="arena-progress-text">
             <span id="arenaCurrentIdx">1</span> / <span id="arenaTotalIdx">15</span>
           </div>
           <div class="arena-score-badge">
-            Đúng: <span id="arenaScoreCount">0</span>
+            Score: <span id="arenaScoreCount">0</span>
           </div>
         </div>
 
@@ -162,7 +189,7 @@
           <div class="arena-prompt-badge" id="arenaPromptDirectionBadge">EN ➔ VI</div>
           <div class="arena-word-row">
             <div class="arena-prompt-word" id="arenaPromptWord">apple</div>
-            <button type="button" class="audio-btn hidden" id="arenaAudioBtn" title="Nghe phát âm">🔊</button>
+            <button type="button" class="audio-btn hidden" id="arenaAudioBtn" title="Listen pronunciation">🔊</button>
           </div>
           <div class="arena-phonetic" id="arenaPhoneticText"></div>
         </div>
@@ -174,12 +201,12 @@
             spellcheck="false"
             autocapitalize="off"
             autocorrect="off"
-            placeholder="Nhập đáp án..."
+            placeholder="Type your answer..."
             required
           />
           <div class="arena-buttons-row">
-            <button type="submit" class="btn-primary" id="arenaSubmitBtn">Kiểm tra</button>
-            <button type="button" class="btn-secondary" id="arenaSkipBtn">Đáp án</button>
+            <button type="submit" class="btn-primary" id="arenaSubmitBtn">Check</button>
+            <button type="button" class="btn-secondary" id="arenaSkipBtn">Answer</button>
           </div>
         </form>
 
@@ -188,11 +215,11 @@
         <!-- Practice Summary Screen -->
         <div class="arena-summary hidden" id="arenaSummaryBox">
           <div class="summary-trophy">🏆</div>
-          <h3>Hoàn thành!</h3>
-          <p id="arenaSummaryText">Đúng 15/15 từ</p>
+          <h3>Completed!</h3>
+          <p id="arenaSummaryText">Score: 15/15</p>
           <div class="summary-actions">
-            <button type="button" class="btn-primary" id="arenaRestartBtn">Luyện lại</button>
-            <button type="button" class="btn-secondary" id="arenaDoneBtn">Quay lại</button>
+            <button type="button" class="btn-primary" id="arenaRestartBtn">Retry</button>
+            <button type="button" class="btn-secondary" id="arenaDoneBtn">Back</button>
           </div>
         </div>
       </section>
@@ -200,8 +227,13 @@
       <!-- SAVED WORDS LIST -->
       <section class="saved-words-section" id="savedWordsSection">
         <div class="saved-header">
-          <span class="saved-title">Từ đã lưu</span>
-          <input type="text" id="searchSavedInput" class="search-mini-input" placeholder="🔍 Tìm..." />
+          <span class="saved-title">Saved Words</span>
+          <div class="saved-header-controls">
+            <input type="text" id="searchSavedInput" class="search-mini-input" placeholder="🔍 Search..." />
+            <button type="button" class="export-btn" id="exportWordsBtn" title="Export saved words to file">
+              📤 Export
+            </button>
+          </div>
         </div>
         <div class="saved-words-list" id="savedWordsList"></div>
       </section>
@@ -213,13 +245,13 @@
       <section class="setting-card">
         <div class="setting-card-header" id="accountViewRow">
           <div class="account-left">
-            <div class="avatar-circle" id="userAvatarCircle">H</div>
+            <div class="avatar-circle" id="userAvatarCircle">U</div>
             <div class="account-meta">
-              <h3 id="displayHeaderName">Học viên</h3>
-              <p id="displayHeaderEmail">Chưa nhập Gmail</p>
+              <h3 id="displayHeaderName">User</h3>
+              <p id="displayHeaderEmail">No Gmail linked</p>
             </div>
           </div>
-          <button type="button" class="edit-pen-btn" id="editAccountBtn" title="Chỉnh sửa thông tin">
+          <button type="button" class="edit-pen-btn" id="editAccountBtn" title="Edit account">
             ✎
           </button>
         </div>
@@ -229,7 +261,7 @@
           <input
             type="text"
             id="settingDisplayNameInput"
-            placeholder="Tên hiển thị..."
+            placeholder="Display Name..."
             required
           />
           <input
@@ -241,8 +273,8 @@
             required
           />
           <div class="inline-edit-actions">
-            <button type="submit" class="btn-primary btn-sm">Lưu</button>
-            <button type="button" class="btn-secondary btn-sm" id="cancelEditAccountBtn">Hủy</button>
+            <button type="submit" class="btn-primary btn-sm">Save</button>
+            <button type="button" class="btn-secondary btn-sm" id="cancelEditAccountBtn">Cancel</button>
           </div>
         </form>
       </section>
@@ -258,7 +290,7 @@
         </div>
 
         <div class="inline-group">
-          <span class="inline-label">Thời gian (phút)</span>
+          <span class="inline-label">Interval (minutes)</span>
           <input
             type="number"
             id="popupIntervalInput"

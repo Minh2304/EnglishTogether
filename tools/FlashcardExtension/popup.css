@@ -141,23 +141,30 @@ body {
   gap: 12px;
 }
 
-/* ================= FLASHCARD TOP BAR ('+' BUTTON TOP-LEFT) ================= */
+/* ================= FLASHCARD TOP BAR ('+' BUTTON & 'ADD LIST' BUTTON) ================= */
 .flashcard-top-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.top-left-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .add-toggle-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   background: linear-gradient(135deg, #6366f1, #4f46e5);
   color: #ffffff;
   border: none;
   border-radius: 10px;
-  padding: 7px 13px;
-  font-size: 13px;
+  padding: 7px 11px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
@@ -172,6 +179,28 @@ body {
 .add-toggle-btn.expanded {
   background: #334155;
   box-shadow: none;
+}
+
+.add-list-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-card);
+  color: #e2e8f0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.add-list-btn:hover,
+.add-list-btn.expanded {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.2);
+  color: #ffffff;
 }
 
 .plus-icon {
@@ -704,6 +733,7 @@ select:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
 }
 
@@ -711,12 +741,73 @@ select:focus {
   font-size: 12px;
   font-weight: 700;
   color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.saved-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .search-mini-input {
-  width: 130px !important;
+  width: 115px !important;
   padding: 4px 8px !important;
   font-size: 11px !important;
+}
+
+.export-btn {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border-subtle);
+  color: #cbd5e1;
+  border-radius: 7px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.export-btn:hover {
+  border-color: var(--primary);
+  color: #ffffff;
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.bulk-textarea {
+  width: 100%;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-main);
+  font-size: 12px;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  margin-bottom: 8px;
+}
+
+.bulk-textarea:focus {
+  border-color: var(--primary);
+}
+
+.bulk-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bulk-status-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .saved-words-list {
@@ -738,6 +829,13 @@ select:focus {
   border-radius: 8px;
   padding: 6px 10px;
   font-size: 12px;
+  gap: 8px;
+}
+
+.saved-word-pair {
+  min-width: 0;
+  flex: 1;
+  word-break: break-word;
 }
 
 .saved-word-pair strong {
@@ -746,6 +844,30 @@ select:focus {
 
 .saved-word-pair span {
   color: #34d399;
+}
+
+.saved-word-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.speak-card-btn {
+  background: transparent;
+  border: none;
+  color: #38bdf8;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  opacity: 0.85;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.speak-card-btn:hover {
+  opacity: 1;
+  background: rgba(56, 189, 248, 0.15);
 }
 
 .delete-card-btn {
