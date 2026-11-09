@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EnglishTogether Flashcard</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation Bar with 2 Tabs: Flashcard & Setting -->
+    <header class="top-nav">
+      <div class="tabs-bar">
+        <button class="tab-btn active" data-tab="flashcard" id="tabBtnFlashcard">
+          <span class="tab-icon">🎴</span> Flashcard
+        </button>
+        <button class="tab-btn" data-tab="setting" id="tabBtnSetting">
+          <span class="tab-icon">⚙️</span> Setting
+        </button>
+      </div>
+      <button class="sync-pill" id="headerSyncBtn" title="Đồng bộ dữ liệu">
+        <span class="sync-dot" id="syncStatusDot"></span>
+        <span id="syncStatusText">Sync</span>
+      </button>
+    </header>
+
+    <!-- ================= TAB 1: FLASHCARD ================= -->
+    <main class="tab-panel active" id="panelFlashcard">
+      <!-- Top Row of Flashcard Tab: '+' Button on Top-Left + Stats -->
+      <div class="flashcard-top-bar">
+        <button class="add-toggle-btn" id="toggleAddBtn" title="Thêm từ mới">
+          <span class="plus-icon" id="plusIcon">+</span>
+          <span class="add-btn-label">Add Flashcard</span>
+        </button>
+        <div class="word-counter-badge">
+          <strong id="totalWordsCount">0</strong> từ
+        </div>
+      </div>
+
+      <!-- Expandable Add Flashcard Section -->
+      <section class="add-card-drawer" id="addCardDrawer">
+        <div class="drawer-inner">
+          <form id="addFlashcardForm" autocomplete="off">
+            <div class="add-inputs-layout">
+              <div class="add-inputs-stack">
+                <!-- English Word Input -->
+                <div class="form-group">
+                  <div class="input-with-actions">
+                    <input
+                      type="text"
+                      id="enInput"
+                      lang="en"
+                      spellcheck="false"
+                      autocapitalize="off"
+                      autocorrect="off"
+                      placeholder="English..."
+                      required
+                    />
+                    <button type="button" class="audio-btn hidden" id="previewAudioBtn" title="Nghe phát âm">
+                      🔊
+                    </button>
+                  </div>
+                  <ul class="suggestions-dropdown hidden" id="enSuggestionsList"></ul>
+                </div>
+
+                <!-- Vietnamese Meaning Input -->
+                <div class="form-group">
+                  <input
+                    type="text"
+                    id="viInput"
+                    lang="vi"
+                    placeholder="Tiếng Việt..."
+                    required
+                  />
+                </div>
+              </div>
+
+              <!-- Save Button on the Right of the 2 Inputs -->
+              <button type="submit" class="btn-save-side" id="saveCardBtn">
+                Lưu
+              </button>
+            </div>
+
+            <!-- Phonetic & Part of speech preview -->
+            <div class="dict-meta hidden" id="dictMetaBox">
+              <span class="phonetic-badge" id="phoneticText"></span>
+              <span class="pos-badge" id="posText"></span>
+              <span class="en-def-text" id="enDefText"></span>
+            </div>
+
+            <!-- Alternative Vietnamese meaning chips -->
+            <div class="alt-meanings hidden" id="altMeaningsChips"></div>
+          </form>
+        </div>
+      </section>
+
+      <!-- PRACTICE SECTION -->
+      <section class="practice-section" id="practiceMenuSection">
+        <div class="section-header-row">
+          <h2 class="section-title">Practice</h2>
+          <div class="direction-selector" title="Chiều luyện tập">
+            <select id="practiceDirectionSelect">
+              <option value="mixed">🔄 EN ↔ VI</option>
+              <option value="en_to_vi">🇬🇧 EN ➔ 🇻🇳 VI</option>
+              <option value="vi_to_en">🇻🇳 VI ➔ 🇬🇧 EN</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Practice Options List (Hover to show Start button) -->
+        <div class="practice-options-list">
+          <div class="practice-option-item" data-mode="all">
+            <div class="option-info">
+              <div class="option-icon">📚</div>
+              <div>
+                <div class="option-title">All</div>
+                <div class="option-desc"><span id="optAllCount">0</span> words</div>
+              </div>
+            </div>
+            <button class="start-hover-btn" data-count="all">Start ▶</button>
+          </div>
+
+          <div class="practice-option-item" data-mode="15">
+            <div class="option-info">
+              <div class="option-icon">⚡</div>
+              <div>
+                <div class="option-title">15 words</div>
+              </div>
+            </div>
+            <button class="start-hover-btn" data-count="15">Start ▶</button>
+          </div>
+
+          <div class="practice-option-item" data-mode="30">
+            <div class="option-info">
+              <div class="option-icon">🔥</div>
+              <div>
+                <div class="option-title">30 words</div>
+              </div>
+            </div>
+            <button class="start-hover-btn" data-count="30">Start ▶</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACTIVE PRACTICE ARENA (Shown when user clicks Start) -->
+      <section class="practice-arena hidden" id="practiceArenaSection">
+        <div class="arena-top-bar">
+          <button class="btn-back" id="exitPracticeBtn">← Quay lại</button>
+          <div class="arena-progress-text">
+            <span id="arenaCurrentIdx">1</span> / <span id="arenaTotalIdx">15</span>
+          </div>
+          <div class="arena-score-badge">
+            Đúng: <span id="arenaScoreCount">0</span>
+          </div>
+        </div>
+
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="arenaProgressBar"></div>
+        </div>
+
+        <div class="arena-flashcard" id="arenaCardBox">
+          <div class="arena-prompt-badge" id="arenaPromptDirectionBadge">EN ➔ VI</div>
+          <div class="arena-word-row">
+            <div class="arena-prompt-word" id="arenaPromptWord">apple</div>
+            <button type="button" class="audio-btn hidden" id="arenaAudioBtn" title="Nghe phát âm">🔊</button>
+          </div>
+          <div class="arena-phonetic" id="arenaPhoneticText"></div>
+        </div>
+
+        <form id="arenaAnswerForm" class="arena-answer-form" autocomplete="off">
+          <input
+            type="text"
+            id="arenaAnswerInput"
+            spellcheck="false"
+            autocapitalize="off"
+            autocorrect="off"
+            placeholder="Nhập đáp án..."
+            required
+          />
+          <div class="arena-buttons-row">
+            <button type="submit" class="btn-primary" id="arenaSubmitBtn">Kiểm tra</button>
+            <button type="button" class="btn-secondary" id="arenaSkipBtn">Đáp án</button>
+          </div>
+        </form>
+
+        <div class="arena-feedback hidden" id="arenaFeedbackBox"></div>
+
+        <!-- Practice Summary Screen -->
+        <div class="arena-summary hidden" id="arenaSummaryBox">
+          <div class="summary-trophy">🏆</div>
+          <h3>Hoàn thành!</h3>
+          <p id="arenaSummaryText">Đúng 15/15 từ</p>
+          <div class="summary-actions">
+            <button type="button" class="btn-primary" id="arenaRestartBtn">Luyện lại</button>
+            <button type="button" class="btn-secondary" id="arenaDoneBtn">Quay lại</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SAVED WORDS LIST -->
+      <section class="saved-words-section" id="savedWordsSection">
+        <div class="saved-header">
+          <span class="saved-title">Từ đã lưu</span>
+          <input type="text" id="searchSavedInput" class="search-mini-input" placeholder="🔍 Tìm..." />
+        </div>
+        <div class="saved-words-list" id="savedWordsList"></div>
+      </section>
+    </main>
+
+    <!-- ================= TAB 2: SETTING (MINIMALIST) ================= -->
+    <main class="tab-panel" id="panelSetting">
+      <!-- Top Account Bar with Pencil Edit Icon -->
+      <section class="setting-card">
+        <div class="setting-card-header" id="accountViewRow">
+          <div class="account-left">
+            <div class="avatar-circle" id="userAvatarCircle">H</div>
+            <div class="account-meta">
+              <h3 id="displayHeaderName">Học viên</h3>
+              <p id="displayHeaderEmail">Chưa nhập Gmail</p>
+            </div>
+          </div>
+          <button type="button" class="edit-pen-btn" id="editAccountBtn" title="Chỉnh sửa thông tin">
+            ✎
+          </button>
+        </div>
+
+        <!-- Inline Edit Form (Hidden until Pencil icon is clicked) -->
+        <form id="accountSettingsForm" class="account-inline-edit hidden" autocomplete="off">
+          <input
+            type="text"
+            id="settingDisplayNameInput"
+            placeholder="Tên hiển thị..."
+            required
+          />
+          <input
+            type="email"
+            id="settingEmailInput"
+            lang="en"
+            spellcheck="false"
+            placeholder="Gmail..."
+            required
+          />
+          <div class="inline-edit-actions">
+            <button type="submit" class="btn-primary btn-sm">Lưu</button>
+            <button type="button" class="btn-secondary btn-sm" id="cancelEditAccountBtn">Hủy</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Popup Practice Timer Section -->
+      <section class="setting-card">
+        <div class="setting-row-between">
+          <h3 class="setting-section-title">Popup Practice</h3>
+          <label class="toggle-switch">
+            <input type="checkbox" id="popupPracticeToggle" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="inline-group">
+          <span class="inline-label">Thời gian (phút)</span>
+          <input
+            type="number"
+            id="popupIntervalInput"
+            min="1"
+            max="240"
+            step="1"
+            value="5"
+          />
+        </div>
+      </section>
+
+      <div class="setting-status-banner hidden" id="settingToastBanner"></div>
+    </main>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

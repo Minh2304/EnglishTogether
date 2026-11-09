@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flashcard Check</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    }
+    body {
+      background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+      color: #f8fafc;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 16px 18px;
+      overflow: hidden;
+    }
+    .et-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .et-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #a5b4fc;
+      background: rgba(99, 102, 241, 0.16);
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .et-close-btn {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: rgba(30, 41, 59, 0.8);
+      color: #94a3b8;
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .et-close-btn:hover {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+    .et-prompt-box {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 12px;
+      padding: 14px;
+      text-align: center;
+      margin-bottom: 10px;
+    }
+    .et-prompt-label {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-bottom: 4px;
+    }
+    .et-prompt-word {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ffffff;
+      word-break: break-word;
+    }
+    .et-phonetic {
+      font-size: 12px;
+      color: #38bdf8;
+      margin-top: 4px;
+    }
+    .et-input-row {
+      display: flex;
+      gap: 8px;
+    }
+    .et-input {
+      flex: 1;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: #f8fafc;
+      font-size: 14px;
+      outline: none;
+    }
+    .et-input:focus {
+      border-color: #6366f1;
+    }
+    .et-input.error {
+      border-color: #ef4444;
+    }
+    .et-input.success {
+      border-color: #10b981;
+      background: rgba(16, 185, 129, 0.12);
+    }
+    .et-submit-btn {
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+      padding: 0 14px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .et-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    .et-feedback { color: #94a3b8; }
+    .et-feedback.ok { color: #34d399; font-weight: 600; }
+    .et-feedback.err { color: #f87171; }
+    .et-hint-btn {
+      background: none;
+      border: none;
+      color: #64748b;
+      font-size: 11px;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="et-header">
+    <span class="et-badge">⚡ Flashcard Check</span>
+    <button class="et-close-btn" id="closeBtn" title="Tắt tạm thời">&times;</button>
+  </div>
+  <div class="et-prompt-box">
+    <div class="et-prompt-label" id="promptLabel">Từ Tiếng Anh</div>
+    <div class="et-prompt-word" id="promptWord">...</div>
+    <div class="et-phonetic" id="phoneticText"></div>
+  </div>
+  <form id="quizForm" class="et-input-row" autocomplete="off">
+    <input type="text" id="answerInput" class="et-input" placeholder="Nhập đáp án..." autofocus />
+    <button type="submit" class="et-submit-btn">Kiểm tra</button>
+  </form>
+  <div class="et-footer">
+    <span id="feedbackText" class="et-feedback">Nhập đáp án rồi nhấn Enter</span>
+    <button type="button" id="hintBtn" class="et-hint-btn">Xem gợi ý</button>
+  </div>
+  <script src="quiz-popup.js"></script>
+</body>
+</html>
+

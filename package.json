@@ -1,0 +1,15 @@
+{
+  "name": "englishtogether",
+  "version": "1.0.0",
+  "description": "EnglishTogether - Flashcard Chrome Extension & Vercel Sync Server",
+  "private": true,
+  "scripts": {
+    "start": "echo 'Deploy to Vercel or run vercel dev'"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0"
+  }
+}
