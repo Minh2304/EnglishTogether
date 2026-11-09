@@ -87,19 +87,25 @@
       .replace(/\s+/g, ' ');
   }
 
-  function isAnswerCorrect(userAnswer, targetText) {
+  function isAnswerCorrect(userAnswer, targetText, altCandidates = []) {
     const cleanUser = normalizeText(userAnswer);
     if (!cleanUser) return false;
 
-    const cleanTarget = normalizeText(targetText);
-    if (cleanUser === cleanTarget) return true;
+    const allTargets = [targetText, ...(Array.isArray(altCandidates) ? altCandidates : [])];
+    for (const rawTarget of allTargets) {
+      const cleanTarget = normalizeText(rawTarget);
+      if (!cleanTarget) continue;
+      if (cleanUser === cleanTarget) return true;
 
-    const parts = cleanTarget
-      .split(/[,;/|]+/)
-      .map(s => normalizeText(s.replace(/\([^)]*\)/g, '')))
-      .filter(Boolean);
+      const parts = cleanTarget
+        .split(/[,;/|]+/)
+        .map(s => normalizeText(s.replace(/\([^)]*\)/g, '')))
+        .filter(Boolean);
 
-    return parts.includes(cleanUser);
+      if (parts.includes(cleanUser)) return true;
+    }
+
+    return false;
   }
 
   function closePopupAndRestartTimer(hostEl) {
@@ -358,7 +364,8 @@
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const val = input.value;
-      if (isAnswerCorrect(val, expectedAnswer)) {
+      const altList = isEnToVi && Array.isArray(card.altMeanings) ? card.altMeanings : [];
+      if (isAnswerCorrect(val, expectedAnswer, altList)) {
         input.classList.remove('error');
         input.classList.add('success');
         feedback.className = 'et-feedback ok';

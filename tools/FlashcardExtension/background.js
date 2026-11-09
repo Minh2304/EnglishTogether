@@ -2,6 +2,7 @@ const ALARM_NAME = 'ET_FLASHCARD_POPUP_ALARM';
 const SYNC_DEBOUNCE_ALARM = 'ET_SYNC_FLUSH_ALARM';
 const DEFAULT_SERVER_URL = 'https://flashcarddatabase.vercel.app';
 const AUTO_PULL_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours cooldown for automatic pulls
+const POPUP_REPEAT_COOLDOWN_COUNT = 5; // Do not repeat a word for the next 5 popup appearances
 
 const DEFAULT_STATE = {
   email: '',
@@ -18,7 +19,8 @@ const DEFAULT_STATE = {
   serverVersionAt: 0,
   dirtyCardIds: [],
   deletedCardIds: [],
-  dirtyProfile: false
+  dirtyProfile: false,
+  recentPopupCardIds: []
 };
 
 const activeSidePanelPorts = new Set();
@@ -62,7 +64,6 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onDisconnect.addListener(async () => {
       activeSidePanelPorts.delete(port);
       if (activeSidePanelPorts.size === 0) {
-        // Flush any pending changes in ONE single batched request when user closes the Side Panel
         await chrome.alarms.clear(SYNC_DEBOUNCE_ALARM);
         await flushPendingDeltaToServer();
         await schedulePopupAlarm();
@@ -87,7 +88,8 @@ async function getStoredState() {
     serverVersionAt: Number(data.serverVersionAt) || 0,
     dirtyCardIds: Array.isArray(data.dirtyCardIds) ? data.dirtyCardIds : [],
     deletedCardIds: Array.isArray(data.deletedCardIds) ? data.deletedCardIds : [],
-    dirtyProfile: Boolean(data.dirtyProfile)
+    dirtyProfile: Boolean(data.dirtyProfile),
+    recentPopupCardIds: Array.isArray(data.recentPopupCardIds) ? data.recentPopupCardIds : []
   };
 }
 
@@ -100,19 +102,45 @@ function normalizeServerUrl(url) {
   return trimmed;
 }
 
+function mergeAltMeanings(arr1 = [], arr2 = []) {
+  const set = new Set();
+  for (const m of [...(Array.isArray(arr1) ? arr1 : []), ...(Array.isArray(arr2) ? arr2 : [])]) {
+    const clean = String(m || '').normalize('NFC').trim().toLowerCase();
+    if (clean) set.add(clean);
+  }
+  return Array.from(set);
+}
+
 function mergeFlashcardsLocal(localCards = [], remoteCards = [], deletedIds = []) {
   const deletedSet = new Set(deletedIds);
   const map = new Map();
   for (const c of remoteCards) {
     if (c && c.id && !deletedSet.has(c.id)) {
-      map.set(c.id, c);
+      map.set(c.id, {
+        ...c,
+        altMeanings: mergeAltMeanings(c.altMeanings)
+      });
     }
   }
   for (const c of localCards) {
     if (c && c.id && !deletedSet.has(c.id)) {
       const existing = map.get(c.id);
-      if (!existing || (c.updatedAt || 0) >= (existing.updatedAt || 0)) {
-        map.set(c.id, c);
+      if (!existing) {
+        map.set(c.id, {
+          ...c,
+          altMeanings: mergeAltMeanings(c.altMeanings)
+        });
+      } else {
+        const newer = (c.updatedAt || 0) >= (existing.updatedAt || 0) ? c : existing;
+        const older = newer === c ? existing : c;
+        map.set(c.id, {
+          ...older,
+          ...newer,
+          phonetic: newer.phonetic || older.phonetic || '',
+          partOfSpeech: newer.partOfSpeech || older.partOfSpeech || '',
+          audioUrl: newer.audioUrl || older.audioUrl || '',
+          altMeanings: mergeAltMeanings(newer.altMeanings, older.altMeanings)
+        });
       }
     }
   }
@@ -136,7 +164,6 @@ async function schedulePopupAlarm() {
 
 async function scheduleDebouncedFlush() {
   await chrome.alarms.clear(SYNC_DEBOUNCE_ALARM);
-  // Batch all edits within 0.5 minutes (30 seconds) into a single request
   await chrome.alarms.create(SYNC_DEBOUNCE_ALARM, {
     delayInMinutes: 0.5
   });
@@ -152,7 +179,6 @@ async function flushPendingDeltaToServer() {
   const hasDeletedCards = state.deletedCardIds.length > 0;
   const hasDirtyProfile = state.dirtyProfile;
 
-  // If nothing changed locally, make ZERO requests to Vercel!
   if (!email || !baseUrl || (!hasDirtyCards && !hasDeletedCards && !hasDirtyProfile)) {
     return { ok: true, noChanges: true, state };
   }
@@ -184,7 +210,6 @@ async function flushPendingDeltaToServer() {
       throw new Error(json.error || 'Sync failed');
     }
 
-    // Re-read current storage in case user added more while network request was in flight
     const latest = await getStoredState();
     const sentDirtySet = dirtySet;
     const sentDelSet = new Set(deletedIds);
@@ -218,10 +243,13 @@ async function pullFromServer(force = false) {
     return { ok: false, reason: 'missing_config', state };
   }
 
-  // Cooldown check: if not forced, and we already have local data pulled within the last 6 hours, skip calling Vercel!
+  // Check if any local cards are missing altMeanings (e.g. from before the altMeanings upgrade)
+  const needsAltMeaningsUpgrade = state.flashcards.some(c => !Array.isArray(c.altMeanings));
+
   const now = Date.now();
   if (
     !force &&
+    !needsAltMeaningsUpgrade &&
     state.flashcards.length > 0 &&
     state.lastPulledAt > 0 &&
     now - state.lastPulledAt < AUTO_PULL_COOLDOWN_MS
@@ -229,12 +257,14 @@ async function pullFromServer(force = false) {
     return { ok: true, cached: true, state };
   }
 
-  // First flush any pending local changes before pulling
   await flushPendingDeltaToServer();
   const freshState = await getStoredState();
 
   try {
-    const sinceParam = freshState.flashcards.length > 0 ? freshState.serverVersionAt : 0;
+    const sinceParam =
+      freshState.flashcards.length > 0 && !needsAltMeaningsUpgrade
+        ? freshState.serverVersionAt
+        : 0;
     const res = await fetch(
       `${baseUrl}/api/sync?email=${encodeURIComponent(email)}&since=${sinceParam}`,
       {
@@ -250,7 +280,6 @@ async function pullFromServer(force = false) {
       throw new Error(json.error || 'Invalid response from server');
     }
 
-    // If server says nothing changed since our last sync, just update timestamps!
     if (json.unchanged) {
       await chrome.storage.local.set({
         lastPulledAt: Date.now(),
@@ -266,7 +295,6 @@ async function pullFromServer(force = false) {
       freshState.deletedCardIds
     );
 
-    // Check if local had cards that didn't exist on remote yet
     const remoteIdSet = new Set((remote.flashcards || []).map(c => c.id));
     const localOnlyIds = freshState.flashcards
       .filter(c => c && c.id && !remoteIdSet.has(c.id))
@@ -300,10 +328,26 @@ async function pullFromServer(force = false) {
   }
 }
 
-function pickRandomQuizPayload(flashcards, preferredDirection = 'mixed') {
+function pickRandomQuizPayload(flashcards, preferredDirection = 'mixed', recentPopupCardIds = []) {
   if (!Array.isArray(flashcards) || flashcards.length === 0) return null;
-  const randomIndex = Math.floor(Math.random() * flashcards.length);
-  const card = flashcards[randomIndex];
+
+  // Exclude the last 5 shown words (or flashcards.length - 1 if user has <= 5 words)
+  const maxExclusion = Math.min(POPUP_REPEAT_COOLDOWN_COUNT, Math.max(0, flashcards.length - 1));
+  const excludedSet = new Set((recentPopupCardIds || []).slice(0, maxExclusion));
+
+  let eligibleCards = flashcards.filter(c => c && c.id && !excludedSet.has(c.id));
+  if (eligibleCards.length === 0) {
+    eligibleCards = flashcards;
+  }
+
+  const randomIndex = Math.floor(Math.random() * eligibleCards.length);
+  const card = eligibleCards[randomIndex];
+
+  // Record this card at the front of the 5-slot cooldown queue
+  const nextRecentIds = [
+    card.id,
+    ...(recentPopupCardIds || []).filter(id => id !== card.id)
+  ].slice(0, POPUP_REPEAT_COOLDOWN_COUNT);
 
   let direction = preferredDirection;
   if (direction !== 'en_to_vi' && direction !== 'vi_to_en') {
@@ -313,7 +357,8 @@ function pickRandomQuizPayload(flashcards, preferredDirection = 'mixed') {
   return {
     card,
     direction,
-    totalCards: flashcards.length
+    totalCards: flashcards.length,
+    nextRecentIds
   };
 }
 
@@ -328,13 +373,20 @@ async function triggerTopRightPopup(forceShow = false) {
     return { ok: false, reason: 'disabled' };
   }
 
-  const quiz = pickRandomQuizPayload(state.flashcards, state.settings?.practiceDirection);
+  const quiz = pickRandomQuizPayload(
+    state.flashcards,
+    state.settings?.practiceDirection,
+    state.recentPopupCardIds
+  );
   if (!quiz) {
     if (state.settings?.popupEnabled && !isToolPanelOpen()) {
       await schedulePopupAlarm();
     }
     return { ok: false, reason: 'no_cards' };
   }
+
+  // Save updated 5-card cooldown history
+  await chrome.storage.local.set({ recentPopupCardIds: quiz.nextRecentIds });
 
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   let targetTab = tabs.find(t => t.url && /^https?:\/\//i.test(t.url));
@@ -447,7 +499,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       case 'SYNC_QUEUE_DELTA': {
-        // Queue delta changes and debounce network call (30s or when panel closes)
         const state = await getStoredState();
         const dirtySet = new Set(state.dirtyCardIds);
         const delSet = new Set(state.deletedCardIds);

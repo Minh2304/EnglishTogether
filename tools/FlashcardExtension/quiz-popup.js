@@ -71,18 +71,25 @@ function normalizeText(str) {
   return String(str || '').normalize('NFC').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function isAnswerCorrect(userAnswer, targetText) {
+function isAnswerCorrect(userAnswer, targetText, altCandidates = []) {
   const cleanUser = normalizeText(userAnswer);
   if (!cleanUser) return false;
-  const cleanTarget = normalizeText(targetText);
-  if (cleanUser === cleanTarget) return true;
 
-  const parts = cleanTarget
-    .split(/[,;/|]+/)
-    .map(s => normalizeText(s.replace(/\([^)]*\)/g, '')))
-    .filter(Boolean);
+  const allTargets = [targetText, ...(Array.isArray(altCandidates) ? altCandidates : [])];
+  for (const rawTarget of allTargets) {
+    const cleanTarget = normalizeText(rawTarget);
+    if (!cleanTarget) continue;
+    if (cleanUser === cleanTarget) return true;
 
-  return parts.includes(cleanUser);
+    const parts = cleanTarget
+      .split(/[,;/|]+/)
+      .map(s => normalizeText(s.replace(/\([^)]*\)/g, '')))
+      .filter(Boolean);
+
+    if (parts.includes(cleanUser)) return true;
+  }
+
+  return false;
 }
 
 function closeAndRestartTimer() {
@@ -130,7 +137,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('quizForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    if (isAnswerCorrect(input.value, expectedAnswer)) {
+    const altList = isEnToVi && Array.isArray(card.altMeanings) ? card.altMeanings : [];
+    if (isAnswerCorrect(input.value, expectedAnswer, altList)) {
       input.classList.remove('error');
       input.classList.add('success');
       feedback.className = 'et-feedback ok';

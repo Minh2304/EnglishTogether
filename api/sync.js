@@ -14,6 +14,23 @@ function getSql() {
   return neon(dbUrl);
 }
 
+function parseAltMeanings(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map(s => String(s || '').normalize('NFC').trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(s => String(s || '').normalize('NFC').trim()).filter(Boolean);
+      }
+    } catch (e) {
+      // Ignore parse error
+    }
+  }
+  return [];
+}
+
 async function ensureSchema(sql) {
   if (schemaInitialized) return;
 
@@ -34,6 +51,7 @@ async function ensureSchema(sql) {
       user_email TEXT NOT NULL REFERENCES et_users(email) ON DELETE CASCADE,
       english TEXT NOT NULL,
       vietnamese TEXT NOT NULL,
+      alt_meanings TEXT DEFAULT '[]',
       phonetic TEXT DEFAULT '',
       part_of_speech TEXT DEFAULT '',
       audio_url TEXT DEFAULT '',
@@ -41,6 +59,11 @@ async function ensureSchema(sql) {
       updated_at BIGINT NOT NULL,
       PRIMARY KEY (user_email, id)
     )
+  `;
+
+  await sql`
+    ALTER TABLE et_flashcards
+    ADD COLUMN IF NOT EXISTS alt_meanings TEXT DEFAULT '[]'
   `;
 
   await sql`
@@ -88,7 +111,6 @@ async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
   const u = users[0];
   const serverUpdatedAt = Number(u.updated_at) || 0;
 
-  // Bandwidth optimization: if client already has the latest version, skip querying flashcards!
   if (sinceTimestamp > 0 && serverUpdatedAt > 0 && serverUpdatedAt <= sinceTimestamp) {
     return {
       unchanged: true,
@@ -97,7 +119,7 @@ async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
   }
 
   const cards = await sql`
-    SELECT id, english, vietnamese, phonetic, part_of_speech, audio_url, created_at, updated_at
+    SELECT id, english, vietnamese, alt_meanings, phonetic, part_of_speech, audio_url, created_at, updated_at
     FROM et_flashcards
     WHERE user_email = ${email}
     ORDER BY created_at DESC
@@ -105,8 +127,9 @@ async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
 
   const flashcards = cards.map(row => ({
     id: row.id,
-    english: row.english,
-    vietnamese: row.vietnamese,
+    english: String(row.english || '').normalize('NFC'),
+    vietnamese: String(row.vietnamese || '').normalize('NFC'),
+    altMeanings: parseAltMeanings(row.alt_meanings),
     phonetic: row.phonetic || '',
     partOfSpeech: row.part_of_speech || '',
     audioUrl: row.audio_url || '',
@@ -144,7 +167,6 @@ async function writeUserToPostgres(sql, email, body) {
   const popupIntervalMinutes = Math.max(1, Number(settings.popupIntervalMinutes) || 5);
   const practiceDirection = settings.practiceDirection || 'mixed';
 
-  // 1. Upsert user profile & bump updated_at timestamp
   await sql`
     INSERT INTO et_users (email, display_name, popup_enabled, popup_interval_minutes, practice_direction, updated_at)
     VALUES (${email}, ${displayName}, ${popupEnabled}, ${popupIntervalMinutes}, ${practiceDirection}, ${now})
@@ -156,7 +178,6 @@ async function writeUserToPostgres(sql, email, body) {
       updated_at = EXCLUDED.updated_at
   `;
 
-  // 2. Delta delete: delete only specified IDs if provided
   if (Array.isArray(body.deletedIds) && body.deletedIds.length > 0) {
     const delIds = body.deletedIds.map(id => String(id));
     await sql`
@@ -166,7 +187,6 @@ async function writeUserToPostgres(sql, email, body) {
     `;
   }
 
-  // 3. Delta upsert (only modified/new cards) OR legacy full flashcards list
   const cardsToUpsert = Array.isArray(body.upserts)
     ? body.upserts
     : (Array.isArray(body.flashcards) ? body.flashcards : []);
@@ -189,6 +209,7 @@ async function writeUserToPostgres(sql, email, body) {
     const cardId = String(c.id);
     const english = String(c.english).normalize('NFC').trim();
     const vietnamese = String(c.vietnamese).normalize('NFC').trim();
+    const altMeaningsJson = JSON.stringify(parseAltMeanings(c.altMeanings));
     const phonetic = String(c.phonetic || '').normalize('NFC').trim();
     const partOfSpeech = String(c.partOfSpeech || '').trim();
     const audioUrl = String(c.audioUrl || '').trim();
@@ -197,23 +218,35 @@ async function writeUserToPostgres(sql, email, body) {
 
     await sql`
       INSERT INTO et_flashcards (
-        id, user_email, english, vietnamese, phonetic, part_of_speech, audio_url, created_at, updated_at
+        id, user_email, english, vietnamese, alt_meanings, phonetic, part_of_speech, audio_url, created_at, updated_at
       )
       VALUES (
-        ${cardId}, ${email}, ${english}, ${vietnamese}, ${phonetic}, ${partOfSpeech}, ${audioUrl}, ${createdAt}, ${updatedAt}
+        ${cardId}, ${email}, ${english}, ${vietnamese}, ${altMeaningsJson}, ${phonetic}, ${partOfSpeech}, ${audioUrl}, ${createdAt}, ${updatedAt}
       )
       ON CONFLICT (user_email, id) DO UPDATE SET
         english = EXCLUDED.english,
         vietnamese = EXCLUDED.vietnamese,
-        phonetic = EXCLUDED.phonetic,
-        part_of_speech = EXCLUDED.part_of_speech,
-        audio_url = EXCLUDED.audio_url,
+        alt_meanings = CASE
+          WHEN EXCLUDED.alt_meanings <> '[]' THEN EXCLUDED.alt_meanings
+          ELSE et_flashcards.alt_meanings
+        END,
+        phonetic = CASE
+          WHEN EXCLUDED.phonetic <> '' THEN EXCLUDED.phonetic
+          ELSE et_flashcards.phonetic
+        END,
+        part_of_speech = CASE
+          WHEN EXCLUDED.part_of_speech <> '' THEN EXCLUDED.part_of_speech
+          ELSE et_flashcards.part_of_speech
+        END,
+        audio_url = CASE
+          WHEN EXCLUDED.audio_url <> '' THEN EXCLUDED.audio_url
+          ELSE et_flashcards.audio_url
+        END,
         updated_at = EXCLUDED.updated_at
       WHERE et_flashcards.updated_at <= EXCLUDED.updated_at
     `;
   }
 
-  // If client requested lightweight response, skip reading back all rows
   if (body.lightResponse) {
     return { updatedAt: now };
   }

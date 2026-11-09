@@ -22,7 +22,8 @@ let currentLookupMeta = {
   phonetic: '',
   partOfSpeech: '',
   audioUrl: '',
-  enDefinition: ''
+  enDefinition: '',
+  altMeanings: []
 };
 
 let practiceSession = {
@@ -231,7 +232,10 @@ async function loadStateFromStorage() {
     ? stored.flashcards.map(c => ({
         ...c,
         english: String(c.english || '').normalize('NFC').trim(),
-        vietnamese: String(c.vietnamese || '').normalize('NFC').trim()
+        vietnamese: String(c.vietnamese || '').normalize('NFC').trim(),
+        altMeanings: Array.isArray(c.altMeanings)
+          ? c.altMeanings.map(m => String(m || '').normalize('NFC').trim().toLowerCase()).filter(Boolean)
+          : []
       }))
     : [];
   state.settings = {
@@ -425,21 +429,56 @@ function bindEvents() {
     playWordAudio(currentLookupMeta.word || enInput.value, currentLookupMeta.audioUrl);
   });
 
-  // 5. Save Single Flashcard
+  // 5. Save Single Flashcard (including alternative meanings suggested by Dictionary API)
   addFlashcardForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const enWord = enInput.value.normalize('NFC').trim();
     const viMeaning = viInput.value.normalize('NFC').trim();
     if (!enWord || !viMeaning) return;
 
+    // If user pressed Save before dictionary lookup finished for this word, fetch meanings now
+    if (currentLookupMeta.word.toLowerCase() !== enWord.toLowerCase() || !Array.isArray(currentLookupMeta.altMeanings) || currentLookupMeta.altMeanings.length === 0) {
+      const [dictData, viData] = await Promise.all([
+        fetchEnglishDictionaryInfo(enWord),
+        fetchVietnameseTranslation(enWord)
+      ]);
+      const allSuggested = [];
+      if (viData?.primaryMeaning) allSuggested.push(viData.primaryMeaning.normalize('NFC').trim().toLowerCase());
+      if (Array.isArray(viData?.alternatives)) {
+        for (const m of viData.alternatives) {
+          const clean = String(m || '').normalize('NFC').trim().toLowerCase();
+          if (clean && !allSuggested.includes(clean)) allSuggested.push(clean);
+        }
+      }
+      currentLookupMeta = {
+        word: enWord,
+        phonetic: dictData?.phonetic || '',
+        partOfSpeech: dictData?.partOfSpeech || '',
+        audioUrl: dictData?.audioUrl || '',
+        enDefinition: dictData?.enDefinition || '',
+        altMeanings: allSuggested
+      };
+    }
+
     const existingIdx = state.flashcards.findIndex(
       c => c.english.normalize('NFC').toLowerCase() === enWord.toLowerCase()
+    );
+
+    const mainLower = viMeaning.toLowerCase();
+    const prevAlt = existingIdx >= 0 && Array.isArray(state.flashcards[existingIdx].altMeanings)
+      ? state.flashcards[existingIdx].altMeanings
+      : [];
+    const mergedAltSet = new Set(
+      [...prevAlt, ...(currentLookupMeta.altMeanings || [])]
+        .map(m => String(m || '').normalize('NFC').trim().toLowerCase())
+        .filter(m => m && m !== mainLower)
     );
 
     const cardObj = {
       id: existingIdx >= 0 ? state.flashcards[existingIdx].id : `fc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       english: enWord,
       vietnamese: viMeaning,
+      altMeanings: Array.from(mergedAltSet),
       phonetic: currentLookupMeta.word.toLowerCase() === enWord.toLowerCase() ? currentLookupMeta.phonetic : '',
       partOfSpeech: currentLookupMeta.word.toLowerCase() === enWord.toLowerCase() ? currentLookupMeta.partOfSpeech : '',
       audioUrl: currentLookupMeta.word.toLowerCase() === enWord.toLowerCase() ? currentLookupMeta.audioUrl : '',
@@ -459,6 +498,7 @@ function bindEvents() {
     enInput.value = '';
     enInput.__prevUnikeyVal = '';
     viInput.value = '';
+    currentLookupMeta = { word: '', phonetic: '', partOfSpeech: '', audioUrl: '', enDefinition: '', altMeanings: [] };
     dictMetaBox.classList.add('hidden');
     previewAudioBtn.classList.add('hidden');
     altMeaningsChips.classList.add('hidden');
@@ -663,6 +703,7 @@ async function handleSaveBulkList() {
       id: newId,
       english: item.english,
       vietnamese: item.vietnamese,
+      altMeanings: Array.isArray(item.altMeanings) ? item.altMeanings : [],
       phonetic: item.phonetic || '',
       partOfSpeech: item.partOfSpeech || '',
       audioUrl: item.audioUrl || '',
@@ -681,6 +722,69 @@ async function handleSaveBulkList() {
 
   if (addedIds.length > 0) {
     queueDeltaSync({ upsertedIds: addedIds });
+    enrichBulkAddedCards(addedIds);
+  }
+}
+
+async function enrichBulkAddedCards(cardIds) {
+  let changedIds = [];
+  for (const id of cardIds) {
+    const card = state.flashcards.find(c => c.id === id);
+    if (!card) continue;
+    try {
+      const [dictRes, viRes] = await Promise.allSettled([
+        fetchEnglishDictionaryInfo(card.english),
+        fetchVietnameseTranslation(card.english)
+      ]);
+      const dictData = dictRes.status === 'fulfilled' ? dictRes.value : null;
+      const viData = viRes.status === 'fulfilled' ? viRes.value : null;
+
+      let updated = false;
+      if (dictData && dictData.isValid) {
+        if (!card.phonetic && dictData.phonetic) {
+          card.phonetic = dictData.phonetic;
+          updated = true;
+        }
+        if (!card.partOfSpeech && dictData.partOfSpeech) {
+          card.partOfSpeech = dictData.partOfSpeech;
+          updated = true;
+        }
+        if (!card.audioUrl && dictData.audioUrl) {
+          card.audioUrl = dictData.audioUrl;
+          updated = true;
+        }
+      }
+
+      if (viData) {
+        const mainClean = card.vietnamese.normalize('NFC').trim().toLowerCase();
+        const rawPool = [viData.primaryMeaning, ...(viData.alternatives || [])];
+        const altSet = new Set(Array.isArray(card.altMeanings) ? card.altMeanings : []);
+        for (const m of rawPool) {
+          const cleanM = String(m || '').normalize('NFC').trim().toLowerCase();
+          if (cleanM && cleanM !== mainClean) {
+            altSet.add(cleanM);
+          }
+        }
+        const mergedAlts = Array.from(altSet).slice(0, 12);
+        if (mergedAlts.length !== (card.altMeanings || []).length) {
+          card.altMeanings = mergedAlts;
+          updated = true;
+        }
+      }
+
+      if (updated) {
+        card.updatedAt = Date.now();
+        changedIds.push(card.id);
+      }
+    } catch (e) {
+      // Ignore individual lookup errors
+    }
+  }
+
+  if (changedIds.length > 0) {
+    await saveStateToStorage();
+    renderAllUI();
+    queueDeltaSync({ upsertedIds: changedIds });
   }
 }
 
@@ -768,13 +872,25 @@ async function lookupAndTranslateWord(rawWord, forceFillVi = false) {
   const dictData = dictResult.status === 'fulfilled' ? dictResult.value : null;
   const viData = transResult.status === 'fulfilled' ? transResult.value : null;
 
+  const suggestedAlts = [];
+  if (viData) {
+    const rawPool = [viData.primaryMeaning, ...(viData.alternatives || [])];
+    for (const item of rawPool) {
+      const clean = String(item || '').normalize('NFC').trim().toLowerCase();
+      if (clean && !suggestedAlts.includes(clean)) {
+        suggestedAlts.push(clean);
+      }
+    }
+  }
+
   if (dictData && dictData.isValid) {
     currentLookupMeta = {
       word,
       phonetic: dictData.phonetic || '',
       partOfSpeech: dictData.partOfSpeech || '',
       audioUrl: dictData.audioUrl || '',
-      enDefinition: dictData.enDefinition || ''
+      enDefinition: dictData.enDefinition || '',
+      altMeanings: suggestedAlts
     };
 
     dictMetaBox.classList.remove('hidden');
@@ -783,7 +899,14 @@ async function lookupAndTranslateWord(rawWord, forceFillVi = false) {
     enDefText.textContent = dictData.enDefinition ? `🇬🇧 ${dictData.enDefinition}` : '';
     previewAudioBtn.classList.remove('hidden');
   } else {
-    currentLookupMeta = { word, phonetic: '', partOfSpeech: '', audioUrl: '', enDefinition: '' };
+    currentLookupMeta = {
+      word,
+      phonetic: '',
+      partOfSpeech: '',
+      audioUrl: '',
+      enDefinition: '',
+      altMeanings: suggestedAlts
+    };
     dictMetaBox.classList.add('hidden');
     previewAudioBtn.classList.remove('hidden');
   }
@@ -1030,18 +1153,29 @@ function normalizeAnswer(str) {
     .replace(/\s+/g, ' ');
 }
 
-function checkPracticeAnswer(userVal, expectedVal) {
+function checkPracticeAnswer(userVal, expectedVal, altCandidates = []) {
   const cleanUser = normalizeAnswer(userVal);
   if (!cleanUser) return false;
-  const cleanTarget = normalizeAnswer(expectedVal);
-  if (cleanUser === cleanTarget) return true;
 
-  const parts = cleanTarget
-    .split(/[,;/|]+/)
-    .map(s => normalizeAnswer(s.replace(/\([^)]*\)/g, '')))
-    .filter(Boolean);
+  const candidatePool = [
+    expectedVal,
+    ...(Array.isArray(altCandidates) ? altCandidates : [])
+  ];
 
-  return parts.includes(cleanUser);
+  for (const rawCandidate of candidatePool) {
+    const cleanTarget = normalizeAnswer(rawCandidate);
+    if (!cleanTarget) continue;
+    if (cleanUser === cleanTarget) return true;
+
+    const parts = cleanTarget
+      .split(/[,;/|]+/)
+      .map(s => normalizeAnswer(s.replace(/\([^)]*\)/g, '')))
+      .filter(Boolean);
+
+    if (parts.includes(cleanUser)) return true;
+  }
+
+  return false;
 }
 
 function handlePracticeSubmit() {
@@ -1054,9 +1188,10 @@ function handlePracticeSubmit() {
   const card = practiceSession.cards[practiceSession.currentIndex];
   const isEnToVi = practiceSession.currentCardDirection === 'en_to_vi';
   const expected = isEnToVi ? card.vietnamese : card.english;
+  const altMeanings = isEnToVi && Array.isArray(card.altMeanings) ? card.altMeanings : [];
   const userAns = arenaAnswerInput.value;
 
-  if (checkPracticeAnswer(userAns, expected)) {
+  if (checkPracticeAnswer(userAns, expected, altMeanings)) {
     practiceSession.score++;
     practiceSession.answeredCurrent = true;
     arenaScoreCount.textContent = practiceSession.score;
@@ -1088,7 +1223,10 @@ function handlePracticeSkipOrNext() {
   const card = practiceSession.cards[practiceSession.currentIndex];
   practiceSession.answeredCurrent = true;
   arenaFeedbackBox.className = 'arena-feedback wrong';
-  arenaFeedbackBox.textContent = `${card.english} ➔ ${card.vietnamese}`;
+  const extra = Array.isArray(card.altMeanings) && card.altMeanings.length > 0
+    ? ` (${card.altMeanings.slice(0, 3).join(', ')})`
+    : '';
+  arenaFeedbackBox.textContent = `${card.english} ➔ ${card.vietnamese}${extra}`;
   arenaFeedbackBox.classList.remove('hidden');
   arenaSubmitBtn.textContent = 'Next ➔';
   arenaSkipBtn.textContent = 'Next ➔';
@@ -1100,7 +1238,8 @@ function renderSavedWordsList(filterText = '') {
   const filtered = state.flashcards.filter(
     c =>
       c.english.normalize('NFC').toLowerCase().includes(q) ||
-      c.vietnamese.normalize('NFC').toLowerCase().includes(q)
+      c.vietnamese.normalize('NFC').toLowerCase().includes(q) ||
+      (Array.isArray(c.altMeanings) && c.altMeanings.some(m => String(m || '').normalize('NFC').toLowerCase().includes(q)))
   );
 
   if (filtered.length === 0) {
@@ -1113,22 +1252,25 @@ function renderSavedWordsList(filterText = '') {
   }
 
   savedWordsList.innerHTML = filtered
-    .map(
-      card => `
-      <div class="saved-word-item">
+    .map(card => {
+      const altList = Array.isArray(card.altMeanings) ? card.altMeanings : [];
+      const altTooltip = altList.length > 0 ? `Other meanings: ${altList.join(', ')}` : '';
+      return `
+      <div class="saved-word-item" ${altTooltip ? `title="${escapeHtml(altTooltip)}"` : ''}>
         <div class="saved-word-pair">
           <strong>${escapeHtml(card.english)}</strong>
           ${card.phonetic ? `<small style="color:#64748b;margin-left:4px;">${escapeHtml(card.phonetic)}</small>` : ''}
           <span style="margin:0 6px;color:#475569;">➔</span>
           <span>${escapeHtml(card.vietnamese)}</span>
+          ${altList.length > 0 ? `<small style="color:#64748b;margin-left:4px;">(+${altList.length})</small>` : ''}
         </div>
         <div class="saved-word-actions">
           <button class="speak-card-btn" data-word="${escapeHtml(card.english)}" data-audio="${escapeHtml(card.audioUrl || '')}" title="Listen pronunciation">🔊</button>
           <button class="delete-card-btn" data-id="${escapeHtml(card.id)}" title="Delete">&times;</button>
         </div>
       </div>
-    `
-    )
+    `;
+    })
     .join('');
 
   savedWordsList.querySelectorAll('.speak-card-btn').forEach(btn => {
