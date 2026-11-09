@@ -304,7 +304,7 @@ function bindEvents() {
     });
   });
 
-  // 2. Header Sync button
+  // 2. Header Sync button (Manual force sync)
   headerSyncBtn.addEventListener('click', async () => {
     if (!state.email) {
       tabBtnSetting.click();
@@ -312,7 +312,7 @@ function bindEvents() {
       settingEmailInput.focus();
       return;
     }
-    await triggerCloudPull(false);
+    await triggerCloudPull(false, true);
   });
 
   // 3a. '+' Add Flashcard Button
@@ -468,14 +468,14 @@ function bindEvents() {
     }, 900);
     enInput.focus();
 
-    triggerCloudPush(false);
+    queueDeltaSync({ upsertedIds: [cardObj.id] });
   });
 
   // 6. Practice Direction change
   practiceDirectionSelect.addEventListener('change', async () => {
     state.settings.practiceDirection = practiceDirectionSelect.value;
     await saveStateToStorage();
-    triggerCloudPush(false);
+    queueDeltaSync({ dirtyProfile: true });
   });
 
   // 7. Practice Options Start buttons
@@ -543,12 +543,12 @@ function bindEvents() {
 
     if (state.email) {
       if (emailChanged) {
-        await triggerCloudPull(true);
+        await triggerCloudPull(true, true);
         state.displayName = newName;
         await saveStateToStorage();
         renderAllUI();
       }
-      const res = await triggerCloudPush(false);
+      const res = await queueDeltaSync({ dirtyProfile: true, flushImmediately: true });
       if (res && res.ok) {
         showSettingToast('✓ Saved & Synced!');
       }
@@ -644,6 +644,7 @@ async function handleSaveBulkList() {
 
   let addedCount = 0;
   let skippedCount = 0;
+  const addedIds = [];
   const now = Date.now();
 
   for (let i = 0; i < items.length; i++) {
@@ -657,8 +658,9 @@ async function handleSaveBulkList() {
     }
 
     existingSet.add(key);
+    const newId = `fc_${now}_${i}_${Math.random().toString(36).slice(2, 6)}`;
     state.flashcards.unshift({
-      id: `fc_${now}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+      id: newId,
       english: item.english,
       vietnamese: item.vietnamese,
       phonetic: item.phonetic || '',
@@ -667,6 +669,7 @@ async function handleSaveBulkList() {
       createdAt: now + i,
       updatedAt: now + i
     });
+    addedIds.push(newId);
     addedCount++;
   }
 
@@ -676,8 +679,8 @@ async function handleSaveBulkList() {
   bulkListTextarea.value = '';
   bulkStatusText.textContent = `✓ Added ${addedCount}, skipped ${skippedCount} duplicate(s)`;
 
-  if (addedCount > 0) {
-    triggerCloudPush(false);
+  if (addedIds.length > 0) {
+    queueDeltaSync({ upsertedIds: addedIds });
   }
 }
 
@@ -1140,7 +1143,7 @@ function renderSavedWordsList(filterText = '') {
       state.flashcards = state.flashcards.filter(c => c.id !== id);
       await saveStateToStorage();
       renderAllUI();
-      triggerCloudPush(true);
+      queueDeltaSync({ deletedIds: [id] });
     });
   });
 }
@@ -1155,13 +1158,12 @@ async function savePopupSettings() {
   state.settings.popupIntervalMinutes = minutes;
 
   await saveStateToStorage();
-  await chrome.runtime.sendMessage({ type: 'UPDATE_ALARM' });
-  triggerCloudPush(false);
+  queueDeltaSync({ dirtyProfile: true });
 }
 
-async function triggerCloudPull(silent = false) {
-  updateSyncBadge('syncing');
-  const res = await chrome.runtime.sendMessage({ type: 'SYNC_PULL' });
+async function triggerCloudPull(silent = false, force = false) {
+  if (force) updateSyncBadge('syncing');
+  const res = await chrome.runtime.sendMessage({ type: 'SYNC_PULL', force });
   await loadStateFromStorage();
   renderAllUI();
   if (!silent && res && !res.ok && res.error) {
@@ -1170,15 +1172,18 @@ async function triggerCloudPull(silent = false) {
   return res;
 }
 
-async function triggerCloudPush(replaceAll = false) {
+async function queueDeltaSync({ upsertedIds = [], deletedIds = [], dirtyProfile = false, flushImmediately = false } = {}) {
   if (!state.email) {
     updateSyncBadge('idle');
     return { ok: false, reason: 'missing_config' };
   }
-  updateSyncBadge('syncing');
+  if (flushImmediately) updateSyncBadge('syncing');
   const res = await chrome.runtime.sendMessage({
-    type: 'SYNC_PUSH',
-    replaceAll
+    type: 'SYNC_QUEUE_DELTA',
+    upsertedIds,
+    deletedIds,
+    dirtyProfile,
+    flushImmediately
   });
   await loadStateFromStorage();
   renderAllUI();

@@ -51,7 +51,7 @@ async function ensureSchema(sql) {
   schemaInitialized = true;
 }
 
-async function readUserFromPostgres(sql, email) {
+async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
   await ensureSchema(sql);
 
   const users = await sql`
@@ -60,6 +60,41 @@ async function readUserFromPostgres(sql, email) {
     WHERE email = ${email}
     LIMIT 1
   `;
+
+  if (users.length === 0) {
+    const defaultName = email.split('@')[0];
+    const now = Date.now();
+    await sql`
+      INSERT INTO et_users (email, display_name, popup_enabled, popup_interval_minutes, practice_direction, updated_at)
+      VALUES (${email}, ${defaultName}, FALSE, 5, 'mixed', ${now})
+      ON CONFLICT (email) DO NOTHING
+    `;
+    return {
+      unchanged: false,
+      data: {
+        email,
+        displayName: defaultName,
+        flashcards: [],
+        settings: {
+          popupEnabled: false,
+          popupIntervalMinutes: 5,
+          practiceDirection: 'mixed'
+        },
+        updatedAt: now
+      }
+    };
+  }
+
+  const u = users[0];
+  const serverUpdatedAt = Number(u.updated_at) || 0;
+
+  // Bandwidth optimization: if client already has the latest version, skip querying flashcards!
+  if (sinceTimestamp > 0 && serverUpdatedAt > 0 && serverUpdatedAt <= sinceTimestamp) {
+    return {
+      unchanged: true,
+      updatedAt: serverUpdatedAt
+    };
+  }
 
   const cards = await sql`
     SELECT id, english, vietnamese, phonetic, part_of_speech, audio_url, created_at, updated_at
@@ -79,62 +114,37 @@ async function readUserFromPostgres(sql, email) {
     updatedAt: Number(row.updated_at) || Date.now()
   }));
 
-  if (users.length === 0) {
-    const defaultName = email.split('@')[0];
-    const now = Date.now();
-    await sql`
-      INSERT INTO et_users (email, display_name, popup_enabled, popup_interval_minutes, practice_direction, updated_at)
-      VALUES (${email}, ${defaultName}, FALSE, 5, 'mixed', ${now})
-      ON CONFLICT (email) DO NOTHING
-    `;
-    return {
-      email,
-      displayName: defaultName,
-      flashcards: [],
-      settings: {
-        popupEnabled: false,
-        popupIntervalMinutes: 5,
-        practiceDirection: 'mixed'
-      },
-      updatedAt: now
-    };
-  }
-
-  const u = users[0];
   return {
-    email: u.email,
-    displayName: u.display_name || email.split('@')[0],
-    flashcards,
-    settings: {
-      popupEnabled: Boolean(u.popup_enabled),
-      popupIntervalMinutes: Number(u.popup_interval_minutes) || 5,
-      practiceDirection: u.practice_direction || 'mixed'
-    },
-    updatedAt: Number(u.updated_at) || Date.now()
+    unchanged: false,
+    data: {
+      email: u.email,
+      displayName: u.display_name || email.split('@')[0],
+      flashcards,
+      settings: {
+        popupEnabled: Boolean(u.popup_enabled),
+        popupIntervalMinutes: Number(u.popup_interval_minutes) || 5,
+        practiceDirection: u.practice_direction || 'mixed'
+      },
+      updatedAt: serverUpdatedAt
+    }
   };
 }
 
 async function writeUserToPostgres(sql, email, body) {
   await ensureSchema(sql);
 
-  const existing = await readUserFromPostgres(sql, email);
   const now = Date.now();
-
   const displayName =
     typeof body.displayName === 'string' && body.displayName.trim()
       ? body.displayName.trim()
-      : existing.displayName || email.split('@')[0];
+      : email.split('@')[0];
 
-  const settings = {
-    ...existing.settings,
-    ...(body.settings || {})
-  };
-
+  const settings = body.settings || {};
   const popupEnabled = Boolean(settings.popupEnabled);
   const popupIntervalMinutes = Math.max(1, Number(settings.popupIntervalMinutes) || 5);
   const practiceDirection = settings.practiceDirection || 'mixed';
 
-  // Upsert user profile in et_users
+  // 1. Upsert user profile & bump updated_at timestamp
   await sql`
     INSERT INTO et_users (email, display_name, popup_enabled, popup_interval_minutes, practice_direction, updated_at)
     VALUES (${email}, ${displayName}, ${popupEnabled}, ${popupIntervalMinutes}, ${practiceDirection}, ${now})
@@ -146,57 +156,73 @@ async function writeUserToPostgres(sql, email, body) {
       updated_at = EXCLUDED.updated_at
   `;
 
-  if (Array.isArray(body.flashcards)) {
-    const replaceAll = Boolean(body.replaceAll);
-    const incoming = body.flashcards.filter(c => c && c.id && c.english && c.vietnamese);
+  // 2. Delta delete: delete only specified IDs if provided
+  if (Array.isArray(body.deletedIds) && body.deletedIds.length > 0) {
+    const delIds = body.deletedIds.map(id => String(id));
+    await sql`
+      DELETE FROM et_flashcards
+      WHERE user_email = ${email}
+        AND id = ANY(${delIds})
+    `;
+  }
 
-    if (replaceAll) {
-      const incomingIds = incoming.map(c => String(c.id));
-      if (incomingIds.length === 0) {
-        await sql`DELETE FROM et_flashcards WHERE user_email = ${email}`;
-      } else {
-        await sql`
-          DELETE FROM et_flashcards
-          WHERE user_email = ${email}
-            AND NOT (id = ANY(${incomingIds}))
-        `;
-      }
-    }
+  // 3. Delta upsert (only modified/new cards) OR legacy full flashcards list
+  const cardsToUpsert = Array.isArray(body.upserts)
+    ? body.upserts
+    : (Array.isArray(body.flashcards) ? body.flashcards : []);
 
-    for (const c of incoming) {
-      const cardId = String(c.id);
-      const english = String(c.english).normalize('NFC').trim();
-      const vietnamese = String(c.vietnamese).normalize('NFC').trim();
-      const phonetic = String(c.phonetic || '').normalize('NFC').trim();
-      const partOfSpeech = String(c.partOfSpeech || '').trim();
-      const audioUrl = String(c.audioUrl || '').trim();
-      const createdAt = Number(c.createdAt) || now;
-      const updatedAt = Number(c.updatedAt) || now;
-
+  if (Boolean(body.replaceAll) && Array.isArray(body.flashcards)) {
+    const incomingIds = cardsToUpsert.filter(c => c && c.id).map(c => String(c.id));
+    if (incomingIds.length === 0) {
+      await sql`DELETE FROM et_flashcards WHERE user_email = ${email}`;
+    } else {
       await sql`
-        INSERT INTO et_flashcards (
-          id, user_email, english, vietnamese, phonetic, part_of_speech, audio_url, created_at, updated_at
-        )
-        VALUES (
-          ${cardId}, ${email}, ${english}, ${vietnamese}, ${phonetic}, ${partOfSpeech}, ${audioUrl}, ${createdAt}, ${updatedAt}
-        )
-        ON CONFLICT (user_email, id) DO UPDATE SET
-          english = EXCLUDED.english,
-          vietnamese = EXCLUDED.vietnamese,
-          phonetic = EXCLUDED.phonetic,
-          part_of_speech = EXCLUDED.part_of_speech,
-          audio_url = EXCLUDED.audio_url,
-          updated_at = EXCLUDED.updated_at
-        WHERE et_flashcards.updated_at <= EXCLUDED.updated_at
+        DELETE FROM et_flashcards
+        WHERE user_email = ${email}
+          AND NOT (id = ANY(${incomingIds}))
       `;
     }
   }
 
-  return await readUserFromPostgres(sql, email);
+  const validCards = cardsToUpsert.filter(c => c && c.id && c.english && c.vietnamese);
+  for (const c of validCards) {
+    const cardId = String(c.id);
+    const english = String(c.english).normalize('NFC').trim();
+    const vietnamese = String(c.vietnamese).normalize('NFC').trim();
+    const phonetic = String(c.phonetic || '').normalize('NFC').trim();
+    const partOfSpeech = String(c.partOfSpeech || '').trim();
+    const audioUrl = String(c.audioUrl || '').trim();
+    const createdAt = Number(c.createdAt) || now;
+    const updatedAt = Number(c.updatedAt) || now;
+
+    await sql`
+      INSERT INTO et_flashcards (
+        id, user_email, english, vietnamese, phonetic, part_of_speech, audio_url, created_at, updated_at
+      )
+      VALUES (
+        ${cardId}, ${email}, ${english}, ${vietnamese}, ${phonetic}, ${partOfSpeech}, ${audioUrl}, ${createdAt}, ${updatedAt}
+      )
+      ON CONFLICT (user_email, id) DO UPDATE SET
+        english = EXCLUDED.english,
+        vietnamese = EXCLUDED.vietnamese,
+        phonetic = EXCLUDED.phonetic,
+        part_of_speech = EXCLUDED.part_of_speech,
+        audio_url = EXCLUDED.audio_url,
+        updated_at = EXCLUDED.updated_at
+      WHERE et_flashcards.updated_at <= EXCLUDED.updated_at
+    `;
+  }
+
+  // If client requested lightweight response, skip reading back all rows
+  if (body.lightResponse) {
+    return { updatedAt: now };
+  }
+
+  const full = await readUserFromPostgres(sql, email, 0);
+  return full.data;
 }
 
 module.exports = async function handler(req, res) {
-  // Set CORS headers for Chrome/Edge Extension access
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -214,18 +240,27 @@ module.exports = async function handler(req, res) {
 
     if (req.method === 'GET') {
       const email = normalizeEmail(req.query.email);
+      const since = Number(req.query.since) || 0;
       if (!email) {
         return res.status(400).json({
           ok: false,
-          error: 'Missing email query parameter (e.g. ?email=example@gmail.com)'
+          error: 'Missing email query parameter'
         });
       }
 
-      const data = await readUserFromPostgres(sql, email);
+      const result = await readUserFromPostgres(sql, email, since);
+      if (result.unchanged) {
+        return res.status(200).json({
+          ok: true,
+          unchanged: true,
+          updatedAt: result.updatedAt
+        });
+      }
+
       return res.status(200).json({
         ok: true,
-        database: 'FlashCard_database (Neon PostgreSQL)',
-        data
+        unchanged: false,
+        data: result.data
       });
     }
 
@@ -240,11 +275,17 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      const updatedData = await writeUserToPostgres(sql, email, body);
+      const result = await writeUserToPostgres(sql, email, body);
+      if (body.lightResponse) {
+        return res.status(200).json({
+          ok: true,
+          updatedAt: result.updatedAt
+        });
+      }
+
       return res.status(200).json({
         ok: true,
-        database: 'FlashCard_database (Neon PostgreSQL)',
-        data: updatedData
+        data: result
       });
     }
 
