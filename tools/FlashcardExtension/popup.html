@@ -18,10 +18,25 @@
           <span class="tab-icon">⚙️</span> Setting
         </button>
       </div>
-      <button class="sync-pill" id="headerSyncBtn" title="Sync data with cloud">
-        <span class="sync-dot" id="syncStatusDot"></span>
-        <span id="syncStatusText">Sync</span>
-      </button>
+      <div class="top-nav-right">
+        <div class="notif-wrapper" id="notifWrapper">
+          <button type="button" class="notif-bell-btn" id="notifBellBtn" title="Notifications">
+            <span class="bell-icon">🔔</span>
+            <span class="notif-red-dot hidden" id="notifRedDot"></span>
+          </button>
+          <div class="notif-dropdown hidden" id="notifDropdownPanel">
+            <div class="notif-dropdown-header">
+              <span>Shared Word Lists</span>
+              <span class="notif-count-badge" id="notifCountBadge">0</span>
+            </div>
+            <div class="notif-dropdown-list" id="notifDropdownList"></div>
+          </div>
+        </div>
+        <button class="sync-pill" id="headerSyncBtn" title="Sync data with cloud">
+          <span class="sync-dot" id="syncStatusDot"></span>
+          <span id="syncStatusText">Sync</span>
+        </button>
+      </div>
     </header>
 
     <!-- ================= TAB 1: FLASHCARD ================= -->
@@ -233,8 +248,32 @@
             <button type="button" class="export-btn" id="exportWordsBtn" title="Export saved words to file">
               📤 Export
             </button>
+            <button type="button" class="share-btn" id="shareWordsBtn" title="Share word list with another user">
+              🔗 Share
+            </button>
           </div>
         </div>
+
+        <!-- Expandable Share via Gmail Input Box -->
+        <div class="share-words-box hidden" id="shareWordsBox">
+          <form id="shareWordsForm" class="share-words-form" autocomplete="off">
+            <input
+              type="email"
+              id="shareRecipientEmailInput"
+              lang="en"
+              spellcheck="false"
+              autocapitalize="off"
+              autocorrect="off"
+              placeholder="Recipient Gmail..."
+              required
+            />
+            <button type="submit" class="btn-primary btn-sm" id="sendShareWordsBtn">
+              Send
+            </button>
+          </form>
+          <div class="share-status-msg hidden" id="shareWordsStatus"></div>
+        </div>
+
         <div class="saved-words-list" id="savedWordsList"></div>
       </section>
     </main>

@@ -1,6 +1,6 @@
 {
   "name": "englishtogether",
-  "version": "1.0.0",
+  "version": "1.2.1",
   "description": "EnglishTogether - Flashcard Chrome Extension & Vercel Sync Server",
   "private": true,
   "scripts": {

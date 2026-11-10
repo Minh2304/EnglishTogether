@@ -71,11 +71,76 @@ async function ensureSchema(sql) {
     ON et_flashcards(user_email, created_at DESC)
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS et_shared_lists (
+      id TEXT PRIMARY KEY,
+      sender_email TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      recipient_email TEXT NOT NULL,
+      words_json TEXT NOT NULL,
+      word_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      is_read BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at BIGINT NOT NULL
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_et_shared_recipient
+    ON et_shared_lists(recipient_email, status, created_at DESC)
+  `;
+
   schemaInitialized = true;
+}
+
+async function readPendingSharesForUser(sql, email) {
+  await ensureSchema(sql);
+  if (!email) return [];
+
+  const rows = await sql`
+    SELECT id, sender_email, sender_name, recipient_email, words_json, word_count, status, is_read, created_at
+    FROM et_shared_lists
+    WHERE recipient_email = ${email}
+      AND status = 'pending'
+    ORDER BY created_at DESC
+    LIMIT 30
+  `;
+
+  return rows.map(r => {
+    let flashcards = [];
+    try {
+      const parsed = JSON.parse(r.words_json || '[]');
+      if (Array.isArray(parsed)) {
+        flashcards = parsed.map(c => ({
+          english: String(c.english || '').normalize('NFC').trim(),
+          vietnamese: String(c.vietnamese || '').normalize('NFC').trim(),
+          altMeanings: parseAltMeanings(c.altMeanings),
+          phonetic: String(c.phonetic || '').normalize('NFC').trim(),
+          partOfSpeech: String(c.partOfSpeech || '').trim(),
+          audioUrl: String(c.audioUrl || '').trim()
+        })).filter(c => c.english && c.vietnamese);
+      }
+    } catch (e) {
+      flashcards = [];
+    }
+
+    return {
+      id: r.id,
+      senderEmail: r.sender_email || '',
+      senderName: r.sender_name || (r.sender_email ? r.sender_email.split('@')[0] : 'User'),
+      recipientEmail: r.recipient_email || email,
+      flashcards,
+      wordCount: Number(r.word_count) || flashcards.length,
+      status: r.status || 'pending',
+      isRead: Boolean(r.is_read),
+      createdAt: Number(r.created_at) || Date.now()
+    };
+  });
 }
 
 async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
   await ensureSchema(sql);
+  const sharedLists = await readPendingSharesForUser(sql, email);
 
   const users = await sql`
     SELECT email, display_name, popup_enabled, popup_interval_minutes, practice_direction, updated_at
@@ -94,10 +159,12 @@ async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
     `;
     return {
       unchanged: false,
+      sharedLists,
       data: {
         email,
         displayName: defaultName,
         flashcards: [],
+        sharedLists,
         settings: {
           popupEnabled: false,
           popupIntervalMinutes: 5,
@@ -114,7 +181,8 @@ async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
   if (sinceTimestamp > 0 && serverUpdatedAt > 0 && serverUpdatedAt <= sinceTimestamp) {
     return {
       unchanged: true,
-      updatedAt: serverUpdatedAt
+      updatedAt: serverUpdatedAt,
+      sharedLists
     };
   }
 
@@ -139,10 +207,12 @@ async function readUserFromPostgres(sql, email, sinceTimestamp = 0) {
 
   return {
     unchanged: false,
+    sharedLists,
     data: {
       email: u.email,
       displayName: u.display_name || email.split('@')[0],
       flashcards,
+      sharedLists,
       settings: {
         popupEnabled: Boolean(u.popup_enabled),
         popupIntervalMinutes: Number(u.popup_interval_minutes) || 5,
@@ -274,10 +344,19 @@ module.exports = async function handler(req, res) {
     if (req.method === 'GET') {
       const email = normalizeEmail(req.query.email);
       const since = Number(req.query.since) || 0;
+      const onlyShares = Boolean(req.query.onlyShares);
       if (!email) {
         return res.status(400).json({
           ok: false,
           error: 'Missing email query parameter'
+        });
+      }
+
+      if (onlyShares) {
+        const sharedLists = await readPendingSharesForUser(sql, email);
+        return res.status(200).json({
+          ok: true,
+          sharedLists
         });
       }
 
@@ -286,19 +365,108 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({
           ok: true,
           unchanged: true,
-          updatedAt: result.updatedAt
+          updatedAt: result.updatedAt,
+          sharedLists: result.sharedLists || []
         });
       }
 
       return res.status(200).json({
         ok: true,
         unchanged: false,
+        sharedLists: result.sharedLists || [],
         data: result.data
       });
     }
 
     if (req.method === 'POST') {
       const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+      const action = String(body.action || '').trim();
+
+      if (action === 'share_list') {
+        await ensureSchema(sql);
+        const senderEmail = normalizeEmail(body.senderEmail || body.email) || 'anonymous';
+        const senderName =
+          typeof body.senderName === 'string' && body.senderName.trim()
+            ? body.senderName.normalize('NFC').trim()
+            : (senderEmail !== 'anonymous' ? senderEmail.split('@')[0] : 'Someone');
+        const recipientEmail = normalizeEmail(body.recipientEmail);
+
+        if (!recipientEmail || !recipientEmail.includes('@')) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Invalid recipient Gmail address.'
+          });
+        }
+
+        const rawCards = Array.isArray(body.flashcards) ? body.flashcards : [];
+        const cleanCards = rawCards
+          .filter(c => c && c.english && c.vietnamese)
+          .map(c => ({
+            english: String(c.english).normalize('NFC').trim(),
+            vietnamese: String(c.vietnamese).normalize('NFC').trim(),
+            altMeanings: parseAltMeanings(c.altMeanings),
+            phonetic: String(c.phonetic || '').normalize('NFC').trim(),
+            partOfSpeech: String(c.partOfSpeech || '').trim(),
+            audioUrl: String(c.audioUrl || '').trim()
+          }));
+
+        if (cleanCards.length === 0) {
+          return res.status(400).json({
+            ok: false,
+            error: 'No saved words to share.'
+          });
+        }
+
+        const now = Date.now();
+        const shareId = `sh_${now}_${Math.random().toString(36).slice(2, 8)}`;
+        const wordsJson = JSON.stringify(cleanCards);
+
+        await sql`
+          INSERT INTO et_shared_lists (
+            id, sender_email, sender_name, recipient_email, words_json, word_count, status, is_read, created_at
+          )
+          VALUES (
+            ${shareId}, ${senderEmail}, ${senderName}, ${recipientEmail}, ${wordsJson}, ${cleanCards.length}, 'pending', FALSE, ${now}
+          )
+        `;
+
+        return res.status(200).json({
+          ok: true,
+          shareId,
+          wordCount: cleanCards.length,
+          recipientEmail
+        });
+      }
+
+      if (action === 'resolve_share') {
+        await ensureSchema(sql);
+        const email = normalizeEmail(body.email);
+        const shareId = String(body.shareId || '').trim();
+        const newStatus = body.status === 'dismissed' ? 'dismissed' : 'imported';
+
+        if (!email || !shareId) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Missing email or shareId.'
+          });
+        }
+
+        await sql`
+          UPDATE et_shared_lists
+          SET status = ${newStatus}, is_read = TRUE
+          WHERE id = ${shareId}
+            AND recipient_email = ${email}
+        `;
+
+        const sharedLists = await readPendingSharesForUser(sql, email);
+        return res.status(200).json({
+          ok: true,
+          shareId,
+          status: newStatus,
+          sharedLists
+        });
+      }
+
       const email = normalizeEmail(body.email);
 
       if (!email) {

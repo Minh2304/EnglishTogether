@@ -9,6 +9,7 @@ const DEFAULT_STATE = {
   displayName: 'User',
   serverUrl: DEFAULT_SERVER_URL,
   flashcards: [],
+  sharedLists: [],
   settings: {
     popupEnabled: false,
     popupIntervalMinutes: 5,
@@ -79,6 +80,7 @@ async function getStoredState() {
     displayName: data.displayName ?? DEFAULT_STATE.displayName,
     serverUrl: data.serverUrl || DEFAULT_SERVER_URL,
     flashcards: Array.isArray(data.flashcards) ? data.flashcards : [],
+    sharedLists: Array.isArray(data.sharedLists) ? data.sharedLists : [],
     settings: {
       ...DEFAULT_STATE.settings,
       ...(data.settings || {})
@@ -234,6 +236,238 @@ async function flushPendingDeltaToServer() {
   }
 }
 
+function parseInboxRowToShare(row, recipientEmail) {
+  if (!row || !row.id) return null;
+  let meta = {};
+  let flashcards = [];
+  try {
+    meta = JSON.parse(row.english || '{}');
+  } catch (e) {
+    meta = { senderName: String(row.english || 'Someone') };
+  }
+  try {
+    const parsedCards = JSON.parse(row.vietnamese || '[]');
+    if (Array.isArray(parsedCards)) {
+      flashcards = parsedCards.filter(c => c && c.english && c.vietnamese);
+    }
+  } catch (e) {
+    flashcards = [];
+  }
+  if (flashcards.length === 0) return null;
+  return {
+    id: row.id,
+    senderEmail: meta.senderEmail || '',
+    senderName: meta.senderName || (meta.senderEmail ? meta.senderEmail.split('@')[0] : 'Someone'),
+    recipientEmail: meta.recipientEmail || recipientEmail,
+    flashcards,
+    wordCount: Number(meta.wordCount) || flashcards.length,
+    status: 'pending',
+    isRead: false,
+    createdAt: Number(meta.createdAt || row.createdAt) || Date.now()
+  };
+}
+
+async function fetchShareInboxFallback(baseUrl, email) {
+  try {
+    const inboxRes = await fetch(
+      `${baseUrl}/api/sync?email=${encodeURIComponent(`share_inbox__${email}`)}&since=0`,
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' }
+      }
+    );
+    if (!inboxRes.ok) return [];
+    const inboxJson = await inboxRes.json();
+    const rows = Array.isArray(inboxJson?.data?.flashcards) ? inboxJson.data.flashcards : [];
+    return rows
+      .map(r => parseInboxRowToShare(r, email))
+      .filter(Boolean)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch (e) {
+    return [];
+  }
+}
+
+async function checkPendingShares() {
+  const state = await getStoredState();
+  const email = String(state.email || '').trim().toLowerCase();
+  const baseUrl = normalizeServerUrl(state.serverUrl);
+
+  if (!email || !baseUrl) {
+    return { ok: false, reason: 'missing_config', sharedLists: [] };
+  }
+
+  try {
+    const res = await fetch(
+      `${baseUrl}/api/sync?email=${encodeURIComponent(email)}&onlyShares=1`,
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' }
+      }
+    );
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const json = await res.json();
+    if (!json.ok) {
+      throw new Error(json.error || 'Failed to check shares');
+    }
+
+    const sharedLists = Array.isArray(json.sharedLists)
+      ? json.sharedLists
+      : await fetchShareInboxFallback(baseUrl, email);
+
+    await chrome.storage.local.set({ sharedLists });
+    return { ok: true, sharedLists };
+  } catch (err) {
+    return { ok: false, error: err.message, sharedLists: state.sharedLists || [] };
+  }
+}
+
+async function shareWordListToRecipient({ recipientEmail, flashcards }) {
+  const state = await getStoredState();
+  const senderEmail = String(state.email || '').trim().toLowerCase() || 'anonymous';
+  const senderName =
+    state.displayName && state.displayName !== 'User'
+      ? state.displayName
+      : (senderEmail !== 'anonymous' ? senderEmail.split('@')[0] : 'Someone');
+  const baseUrl = normalizeServerUrl(state.serverUrl);
+
+  const cleanRecipient = String(recipientEmail || '').trim().toLowerCase();
+  if (!cleanRecipient || !cleanRecipient.includes('@')) {
+    return { ok: false, error: 'Please enter a valid Gmail address.' };
+  }
+
+  const rawCards = Array.isArray(flashcards) ? flashcards : state.flashcards;
+  const cleanCards = (Array.isArray(rawCards) ? rawCards : [])
+    .filter(c => c && c.english && c.vietnamese)
+    .map(c => ({
+      english: String(c.english).normalize('NFC').trim(),
+      vietnamese: String(c.vietnamese).normalize('NFC').trim(),
+      altMeanings: Array.isArray(c.altMeanings) ? c.altMeanings : [],
+      phonetic: String(c.phonetic || '').normalize('NFC').trim(),
+      partOfSpeech: String(c.partOfSpeech || '').trim(),
+      audioUrl: String(c.audioUrl || '').trim()
+    }));
+
+  if (cleanCards.length === 0) {
+    return { ok: false, error: 'No saved words to share.' };
+  }
+
+  try {
+    const res = await fetch(`${baseUrl}/api/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'share_list',
+        senderEmail,
+        senderName,
+        recipientEmail: cleanRecipient,
+        flashcards: cleanCards
+      })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.ok && json.shareId) {
+      return {
+        ok: true,
+        shareId: json.shareId,
+        wordCount: json.wordCount || cleanCards.length,
+        recipientEmail: cleanRecipient
+      };
+    }
+
+    // Fallback: write to virtual share_inbox__<recipientEmail> on existing server schema
+    const now = Date.now();
+    const shareId = `sh_${now}_${Math.random().toString(36).slice(2, 8)}`;
+    const metaJson = JSON.stringify({
+      senderEmail,
+      senderName,
+      recipientEmail: cleanRecipient,
+      wordCount: cleanCards.length,
+      createdAt: now
+    });
+    const wordsJson = JSON.stringify(cleanCards);
+
+    const fbRes = await fetch(`${baseUrl}/api/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: `share_inbox__${cleanRecipient}`,
+        displayName: `Inbox ${cleanRecipient}`,
+        upserts: [
+          {
+            id: shareId,
+            english: metaJson,
+            vietnamese: wordsJson,
+            createdAt: now,
+            updatedAt: now
+          }
+        ],
+        lightResponse: true
+      })
+    });
+    const fbJson = await fbRes.json().catch(() => ({}));
+    if (!fbRes.ok || !fbJson.ok) {
+      throw new Error(fbJson.error || json.error || `HTTP ${fbRes.status}`);
+    }
+
+    return {
+      ok: true,
+      shareId,
+      wordCount: cleanCards.length,
+      recipientEmail: cleanRecipient
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+async function resolveSharedList({ shareId, status = 'imported' }) {
+  const state = await getStoredState();
+  const email = String(state.email || '').trim().toLowerCase();
+  const baseUrl = normalizeServerUrl(state.serverUrl);
+
+  const nextLocalShares = (state.sharedLists || []).filter(s => s && s.id !== shareId);
+  await chrome.storage.local.set({ sharedLists: nextLocalShares });
+
+  if (!email || !baseUrl || !shareId) {
+    return { ok: true, sharedLists: nextLocalShares };
+  }
+
+  try {
+    const res = await fetch(`${baseUrl}/api/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'resolve_share',
+        email,
+        shareId,
+        status
+      })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && json.ok && Array.isArray(json.sharedLists)) {
+      await chrome.storage.local.set({ sharedLists: json.sharedLists });
+      return { ok: true, sharedLists: json.sharedLists };
+    }
+
+    // Fallback: delete resolved share from virtual share_inbox__<email>
+    await fetch(`${baseUrl}/api/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: `share_inbox__${email}`,
+        deletedIds: [shareId],
+        lightResponse: true
+      })
+    });
+
+    return { ok: true, sharedLists: nextLocalShares };
+  } catch (err) {
+    return { ok: false, error: err.message, sharedLists: nextLocalShares };
+  }
+}
+
 async function pullFromServer(force = false) {
   const state = await getStoredState();
   const email = String(state.email || '').trim().toLowerCase();
@@ -254,7 +488,9 @@ async function pullFromServer(force = false) {
     state.lastPulledAt > 0 &&
     now - state.lastPulledAt < AUTO_PULL_COOLDOWN_MS
   ) {
-    return { ok: true, cached: true, state };
+    await checkPendingShares();
+    const updatedCachedState = await getStoredState();
+    return { ok: true, cached: true, state: updatedCachedState };
   }
 
   await flushPendingDeltaToServer();
@@ -281,14 +517,30 @@ async function pullFromServer(force = false) {
     }
 
     if (json.unchanged) {
+      const nextSharedLists = Array.isArray(json.sharedLists)
+        ? json.sharedLists
+        : await fetchShareInboxFallback(baseUrl, email);
       await chrome.storage.local.set({
+        sharedLists: nextSharedLists,
         lastPulledAt: Date.now(),
         lastSyncedAt: Date.now()
       });
-      return { ok: true, unchanged: true, state: freshState };
+      return {
+        ok: true,
+        unchanged: true,
+        state: { ...freshState, sharedLists: nextSharedLists }
+      };
     }
 
     const remote = json.data || {};
+    let nextSharedLists = freshState.sharedLists;
+    if (Array.isArray(json.sharedLists)) {
+      nextSharedLists = json.sharedLists;
+    } else if (Array.isArray(remote.sharedLists)) {
+      nextSharedLists = remote.sharedLists;
+    } else {
+      nextSharedLists = await fetchShareInboxFallback(baseUrl, email);
+    }
     const mergedCards = mergeFlashcardsLocal(
       freshState.flashcards,
       remote.flashcards || [],
@@ -305,6 +557,7 @@ async function pullFromServer(force = false) {
       displayName: remote.displayName || freshState.displayName || email.split('@')[0],
       serverUrl: baseUrl,
       flashcards: mergedCards,
+      sharedLists: nextSharedLists,
       settings: {
         ...freshState.settings,
         ...(remote.settings || {})
@@ -459,7 +712,6 @@ async function tryAutoDetectEmail() {
           email,
           displayName: state.displayName === 'User' ? email.split('@')[0] : state.displayName
         });
-        await pullFromServer(true);
       }
     });
   }
@@ -478,7 +730,6 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(async () => {
   await configureSidePanel();
   await tryAutoDetectEmail();
-  await pullFromServer(false);
   await schedulePopupAlarm();
 });
 
@@ -495,6 +746,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case 'SYNC_PULL': {
         const res = await pullFromServer(Boolean(message.force));
+        sendResponse(res);
+        break;
+      }
+      case 'CHECK_SHARES': {
+        const res = await checkPendingShares();
+        sendResponse(res);
+        break;
+      }
+      case 'SHARE_WORD_LIST': {
+        const res = await shareWordListToRecipient({
+          recipientEmail: message.recipientEmail,
+          flashcards: message.flashcards
+        });
+        sendResponse(res);
+        break;
+      }
+      case 'RESOLVE_SHARE': {
+        const res = await resolveSharedList({
+          shareId: message.shareId,
+          status: message.status
+        });
         sendResponse(res);
         break;
       }

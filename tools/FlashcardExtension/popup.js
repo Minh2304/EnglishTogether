@@ -9,6 +9,7 @@ const state = {
   displayName: 'User',
   serverUrl: DEFAULT_SERVER_URL,
   flashcards: [],
+  sharedLists: [],
   settings: {
     popupEnabled: false,
     popupIntervalMinutes: 5,
@@ -128,6 +129,14 @@ const headerSyncBtn = document.getElementById('headerSyncBtn');
 const syncStatusDot = document.getElementById('syncStatusDot');
 const syncStatusText = document.getElementById('syncStatusText');
 
+// Notification Bell Elements
+const notifWrapper = document.getElementById('notifWrapper');
+const notifBellBtn = document.getElementById('notifBellBtn');
+const notifRedDot = document.getElementById('notifRedDot');
+const notifDropdownPanel = document.getElementById('notifDropdownPanel');
+const notifCountBadge = document.getElementById('notifCountBadge');
+const notifDropdownList = document.getElementById('notifDropdownList');
+
 // Add Flashcard & Add List Elements
 const toggleAddBtn = document.getElementById('toggleAddBtn');
 const toggleAddListBtn = document.getElementById('toggleAddListBtn');
@@ -177,11 +186,17 @@ const arenaSummaryText = document.getElementById('arenaSummaryText');
 const arenaRestartBtn = document.getElementById('arenaRestartBtn');
 const arenaDoneBtn = document.getElementById('arenaDoneBtn');
 
-// Saved words list & Export
+// Saved words list, Export & Share
 const savedWordsSection = document.getElementById('savedWordsSection');
 const savedWordsList = document.getElementById('savedWordsList');
 const searchSavedInput = document.getElementById('searchSavedInput');
 const exportWordsBtn = document.getElementById('exportWordsBtn');
+const shareWordsBtn = document.getElementById('shareWordsBtn');
+const shareWordsBox = document.getElementById('shareWordsBox');
+const shareWordsForm = document.getElementById('shareWordsForm');
+const shareRecipientEmailInput = document.getElementById('shareRecipientEmailInput');
+const sendShareWordsBtn = document.getElementById('sendShareWordsBtn');
+const shareWordsStatus = document.getElementById('shareWordsStatus');
 
 // Setting Tab Elements
 const userAvatarCircle = document.getElementById('userAvatarCircle');
@@ -204,6 +219,7 @@ let userEditedViManually = false;
 document.addEventListener('DOMContentLoaded', async () => {
   attachEnglishUnikeyBypass(enInput, () => true);
   attachEnglishUnikeyBypass(settingEmailInput, () => true);
+  attachEnglishUnikeyBypass(shareRecipientEmailInput, () => true);
   attachEnglishUnikeyBypass(arenaAnswerInput, () => practiceSession.currentCardDirection === 'vi_to_en');
 
   await loadStateFromStorage();
@@ -211,8 +227,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindEvents();
 
   if (state.email) {
-    triggerCloudPull(true);
+    // Sync data and check shared word list notifications once when the tool is opened
+    triggerCloudPull(true, true);
   }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.sharedLists) {
+      state.sharedLists = Array.isArray(changes.sharedLists.newValue)
+        ? changes.sharedLists.newValue
+        : [];
+      renderNotificationsUI();
+    }
+  });
 });
 
 async function loadStateFromStorage() {
@@ -221,6 +247,7 @@ async function loadStateFromStorage() {
     'displayName',
     'serverUrl',
     'flashcards',
+    'sharedLists',
     'settings',
     'lastSyncedAt'
   ]);
@@ -238,6 +265,7 @@ async function loadStateFromStorage() {
           : []
       }))
     : [];
+  state.sharedLists = Array.isArray(stored.sharedLists) ? stored.sharedLists : [];
   state.settings = {
     popupEnabled: false,
     popupIntervalMinutes: 5,
@@ -253,6 +281,7 @@ async function saveStateToStorage() {
     displayName: state.displayName,
     serverUrl: DEFAULT_SERVER_URL,
     flashcards: state.flashcards,
+    sharedLists: state.sharedLists,
     settings: state.settings,
     lastSyncedAt: state.lastSyncedAt
   });
@@ -265,6 +294,7 @@ function renderAllUI() {
 
   practiceDirectionSelect.value = state.settings.practiceDirection || 'mixed';
   renderSavedWordsList(searchSavedInput.value);
+  renderNotificationsUI();
 
   const name = state.displayName || (state.email ? state.email.split('@')[0] : 'User');
   userAvatarCircle.textContent = name.charAt(0).toUpperCase();
@@ -308,7 +338,7 @@ function bindEvents() {
     });
   });
 
-  // 2. Header Sync button (Manual force sync)
+  // 2. Header Sync button (Manual force sync) & Notification Bell
   headerSyncBtn.addEventListener('click', async () => {
     if (!state.email) {
       tabBtnSetting.click();
@@ -317,6 +347,15 @@ function bindEvents() {
       return;
     }
     await triggerCloudPull(false, true);
+  });
+
+  notifBellBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isHidden = notifDropdownPanel.classList.toggle('hidden');
+    notifBellBtn.classList.toggle('active', !isHidden);
+    if (!isHidden) {
+      renderNotificationsUI();
+    }
   });
 
   // 3a. '+' Add Flashcard Button
@@ -364,9 +403,23 @@ function bindEvents() {
     await handleSaveBulkList();
   });
 
-  // 3d. Export Saved Words to File
+  // 3d. Export Saved Words to File & Share Saved Words via Gmail
   exportWordsBtn.addEventListener('click', () => {
     handleExportWords();
+  });
+
+  shareWordsBtn.addEventListener('click', () => {
+    const isHidden = shareWordsBox.classList.toggle('hidden');
+    shareWordsBtn.classList.toggle('active', !isHidden);
+    shareWordsStatus.classList.add('hidden');
+    if (!isHidden) {
+      setTimeout(() => shareRecipientEmailInput.focus(), 50);
+    }
+  });
+
+  shareWordsForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await handleShareWordList();
   });
 
   // 4. Dictionary Autocomplete & Auto-Translation on English Input
@@ -418,6 +471,10 @@ function bindEvents() {
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.form-group')) {
       hideSuggestions();
+    }
+    if (notifWrapper && !e.target.closest('#notifWrapper')) {
+      notifDropdownPanel.classList.add('hidden');
+      notifBellBtn.classList.remove('active');
     }
   });
 
@@ -805,6 +862,196 @@ function handleExportWords() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// ================= SHARE WORD LIST & NOTIFICATIONS =================
+function showShareStatus(message, isError = false) {
+  shareWordsStatus.textContent = message;
+  shareWordsStatus.className = `share-status-msg ${isError ? 'error' : 'success'}`;
+  shareWordsStatus.classList.remove('hidden');
+}
+
+async function handleShareWordList() {
+  if (state.flashcards.length === 0) {
+    showShareStatus('No saved words to share.', true);
+    return;
+  }
+
+  const recipientEmail = String(shareRecipientEmailInput.value || '').trim().toLowerCase();
+  if (!recipientEmail || !recipientEmail.includes('@')) {
+    showShareStatus('Please enter a valid Gmail address.', true);
+    shareRecipientEmailInput.focus();
+    return;
+  }
+
+  sendShareWordsBtn.disabled = true;
+  sendShareWordsBtn.textContent = 'Sending...';
+  shareWordsStatus.classList.add('hidden');
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'SHARE_WORD_LIST',
+      recipientEmail,
+      flashcards: state.flashcards
+    });
+
+    if (res && res.ok) {
+      showShareStatus(`✓ Sent ${res.wordCount || state.flashcards.length} words to ${recipientEmail}`, false);
+      shareRecipientEmailInput.value = '';
+      shareRecipientEmailInput.__prevUnikeyVal = '';
+
+      if (state.email && recipientEmail === state.email.toLowerCase()) {
+        await chrome.runtime.sendMessage({ type: 'CHECK_SHARES' });
+        await loadStateFromStorage();
+        renderNotificationsUI();
+      }
+    } else {
+      showShareStatus(res?.error || 'Failed to send word list.', true);
+    }
+  } catch (err) {
+    showShareStatus(err.message || 'Failed to send word list.', true);
+  } finally {
+    sendShareWordsBtn.disabled = false;
+    sendShareWordsBtn.textContent = 'Send';
+  }
+}
+
+function renderNotificationsUI() {
+  const shares = Array.isArray(state.sharedLists) ? state.sharedLists : [];
+  notifRedDot.classList.toggle('hidden', shares.length === 0);
+  notifCountBadge.textContent = shares.length;
+
+  if (shares.length === 0) {
+    notifDropdownList.innerHTML = `
+      <div class="notif-empty">No shared word lists yet.</div>
+    `;
+    return;
+  }
+
+  notifDropdownList.innerHTML = shares
+    .map(item => {
+      const senderLabel = item.senderName && item.senderName !== 'User'
+        ? item.senderName
+        : (item.senderEmail || 'Someone');
+      const senderSub = item.senderEmail && item.senderEmail !== senderLabel && item.senderEmail !== 'anonymous'
+        ? `${escapeHtml(item.senderEmail)} • `
+        : '';
+      const count = Number(item.wordCount) || (Array.isArray(item.flashcards) ? item.flashcards.length : 0);
+
+      return `
+        <div class="notif-item" data-share-row="${escapeHtml(item.id)}">
+          <div class="notif-item-info">
+            <div class="notif-sender">${escapeHtml(senderLabel)} shared a word list</div>
+            <div class="notif-meta">${senderSub}<strong>${count} words</strong></div>
+          </div>
+          <div class="notif-item-actions">
+            <button type="button" class="notif-import-btn" data-import-share-id="${escapeHtml(item.id)}">
+              Import
+            </button>
+            <button type="button" class="notif-dismiss-btn" data-dismiss-share-id="${escapeHtml(item.id)}" title="Dismiss">
+              &times;
+            </button>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  notifDropdownList.querySelectorAll('.notif-import-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const shareId = btn.dataset.importShareId;
+      await handleImportSharedList(shareId, btn);
+    });
+  });
+
+  notifDropdownList.querySelectorAll('.notif-dismiss-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const shareId = btn.dataset.dismissShareId;
+      await handleDismissSharedList(shareId);
+    });
+  });
+}
+
+async function handleImportSharedList(shareId, btnEl) {
+  const share = (state.sharedLists || []).find(s => s && s.id === shareId);
+  if (!share) return;
+
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = '...';
+  }
+
+  const incomingCards = Array.isArray(share.flashcards) ? share.flashcards : [];
+  // Track existing English words (case-insensitive, NFC) -> Keep old words, skip duplicates!
+  const existingSet = new Set(
+    state.flashcards.map(c => c.english.normalize('NFC').trim().toLowerCase())
+  );
+
+  let addedCount = 0;
+  let skippedCount = 0;
+  const addedIds = [];
+  const now = Date.now();
+
+  for (let i = 0; i < incomingCards.length; i++) {
+    const item = incomingCards[i];
+    const en = String(item?.english || '').normalize('NFC').trim();
+    const vi = String(item?.vietnamese || '').normalize('NFC').trim();
+    if (!en || !vi) continue;
+
+    const key = en.toLowerCase();
+    if (existingSet.has(key)) {
+      // Word already exists -> skip and keep old word
+      skippedCount++;
+      continue;
+    }
+
+    existingSet.add(key);
+    const newId = `fc_${now}_${i}_${Math.random().toString(36).slice(2, 6)}`;
+    state.flashcards.unshift({
+      id: newId,
+      english: en,
+      vietnamese: vi,
+      altMeanings: Array.isArray(item.altMeanings)
+        ? item.altMeanings.map(m => String(m || '').normalize('NFC').trim().toLowerCase()).filter(Boolean)
+        : [],
+      phonetic: String(item.phonetic || '').normalize('NFC').trim(),
+      partOfSpeech: String(item.partOfSpeech || '').trim(),
+      audioUrl: String(item.audioUrl || '').trim(),
+      createdAt: now + i,
+      updatedAt: now + i
+    });
+    addedIds.push(newId);
+    addedCount++;
+  }
+
+  state.sharedLists = (state.sharedLists || []).filter(s => s && s.id !== shareId);
+  await saveStateToStorage();
+  renderAllUI();
+
+  await chrome.runtime.sendMessage({
+    type: 'RESOLVE_SHARE',
+    shareId,
+    status: 'imported'
+  }).catch(() => {});
+
+  if (addedIds.length > 0) {
+    queueDeltaSync({ upsertedIds: addedIds, flushImmediately: true });
+    enrichBulkAddedCards(addedIds);
+  }
+}
+
+async function handleDismissSharedList(shareId) {
+  state.sharedLists = (state.sharedLists || []).filter(s => s && s.id !== shareId);
+  await saveStateToStorage();
+  renderNotificationsUI();
+
+  await chrome.runtime.sendMessage({
+    type: 'RESOLVE_SHARE',
+    shareId,
+    status: 'dismissed'
+  }).catch(() => {});
 }
 
 // ================= DICTIONARY & TRANSLATION APIs =================

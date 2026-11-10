@@ -86,6 +86,182 @@ body {
   box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
 }
 
+.top-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.notif-wrapper {
+  position: relative;
+}
+
+.notif-bell-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.notif-bell-btn:hover,
+.notif-bell-btn.active {
+  border-color: var(--primary);
+  color: var(--text-main);
+  background: rgba(99, 102, 241, 0.18);
+}
+
+.notif-red-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: 1.5px solid #0f172a;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.85);
+}
+
+.notif-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  background: #1e293b;
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  border-radius: 12px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.65);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.notif-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  background: rgba(15, 23, 42, 0.75);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.notif-count-badge {
+  background: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.notif-dropdown-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.notif-empty {
+  padding: 16px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.notif-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  transition: background 0.15s ease;
+}
+
+.notif-item:last-child {
+  border-bottom: none;
+}
+
+.notif-item:hover {
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.notif-item-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.notif-sender {
+  font-size: 12px;
+  color: #f8fafc;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.notif-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.notif-meta strong {
+  color: #38bdf8;
+}
+
+.notif-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.notif-import-btn {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #ffffff;
+  border: none;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s ease, transform 0.12s ease;
+}
+
+.notif-import-btn:hover {
+  opacity: 0.92;
+}
+
+.notif-import-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.notif-dismiss-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 14px;
+  padding: 2px 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.notif-dismiss-btn:hover {
+  color: #ef4444;
+}
+
 .sync-pill {
   display: inline-flex;
   align-items: center;
@@ -756,7 +932,8 @@ select:focus {
   font-size: 11px !important;
 }
 
-.export-btn {
+.export-btn,
+.share-btn {
   background: rgba(15, 23, 42, 0.8);
   border: 1px solid var(--border-subtle);
   color: #cbd5e1;
@@ -769,10 +946,52 @@ select:focus {
   transition: all 0.15s ease;
 }
 
-.export-btn:hover {
+.export-btn:hover,
+.share-btn:hover,
+.share-btn.active {
   border-color: var(--primary);
   color: #ffffff;
   background: rgba(99, 102, 241, 0.2);
+}
+
+.share-words-box {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 9px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.share-words-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.share-words-form input {
+  flex: 1;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.share-words-form button {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.share-status-msg {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.share-status-msg.success {
+  color: #34d399;
+}
+
+.share-status-msg.error {
+  color: #f87171;
 }
 
 .bulk-textarea {
